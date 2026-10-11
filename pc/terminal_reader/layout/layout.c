@@ -155,10 +155,6 @@ void layout_render_page(const layout_t *layout, int page, int rows,
         last_line = layout->line_count;
     }
 
-    /* Status lines are rendered as line -1 and -2. */
-    callback(-1, "", 1, user_data);
-    callback(-2, "", 1, user_data);
-
     /* Content lines. */
     for (int i = first_line; i < last_line; i++) {
         callback(i, layout->text + layout->line_offsets[i], 0, user_data);
@@ -168,4 +164,8 @@ void layout_render_page(const layout_t *layout, int page, int rows,
     for (int i = last_line - first_line; i < content_rows; i++) {
         callback(i, "", 0, user_data);
     }
+
+    /* Status lines are rendered at the bottom as line -1 and -2. */
+    callback(-1, "", 1, user_data);
+    callback(-2, "", 1, user_data);
 }

@@ -127,34 +127,6 @@ typedef struct {
 } render_ctx_t;
 
 /*
- * Draw an ASCII progress bar into `out`. The buffer must be at least `cols + 1`
- * bytes. The bar uses `cols` character cells total, including the framing
- * brackets.
- */
-static void draw_progress_bar(char *out, int cols, int value, int max)
-{
-    if (cols < 3) {
-        out[0] = '\0';
-        return;
-    }
-
-    int fill = 0;
-    if (max > 0) {
-        fill = (value * (cols - 2) + max - 1) / max;
-        if (fill > cols - 2) {
-            fill = cols - 2;
-        }
-    }
-
-    out[0] = '[';
-    for (int i = 0; i < cols - 2; i++) {
-        out[i + 1] = i < fill ? '#' : '-';
-    }
-    out[cols - 1] = ']';
-    out[cols] = '\0';
-}
-
-/*
  * Layout render callback for the terminal.
  */
 static void render_line(int line_number, const char *line_text,
@@ -165,22 +137,20 @@ static void render_line(int line_number, const char *line_text,
     render_ctx_t *ctx = (render_ctx_t *)user_data;
 
     if (is_status) {
-        char chapter_bar[ctx->cols + 1];
-        char book_bar[ctx->cols + 1];
+        int chapter_pct = ctx->total_pages > 0
+                              ? ((ctx->page + 1) * 100) / ctx->total_pages
+                              : 0;
+        int book_pct = ctx->chapter_count > 0
+                           ? ((ctx->chapter_index + 1) * 100) / ctx->chapter_count
+                           : 0;
 
-        int chapter_value = ctx->total_pages > 0 ? ctx->page + 1 : 0;
-        int book_value = ctx->chapter_count > 0 ? ctx->chapter_index + 1 : 0;
-
-        draw_progress_bar(chapter_bar, ctx->cols, chapter_value, ctx->total_pages);
-        draw_progress_bar(book_bar, ctx->cols, book_value, ctx->chapter_count);
-
-        printf("\033[7m %s  |  %d / %d pages %s \033[0m\n",
+        printf("\033[7m %s  %d / %d pages (%d%%) \033[0m\n",
                ctx->chapter_name,
                ctx->page + 1, ctx->total_pages,
-               chapter_bar);
-        printf("\033[7m chapter %d / %d %s \033[0m\n",
+               chapter_pct);
+        printf("\033[7m chapter %d / %d  (%d%%) \033[0m\n",
                ctx->chapter_index + 1, ctx->chapter_count,
-               book_bar);
+               book_pct);
     } else {
         printf("%s\n", line_text);
     }
