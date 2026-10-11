@@ -1,16 +1,22 @@
-# Simple Makefile for the Inky terminal EPUB reader prototype.
+# Makefile for the Inky terminal EPUB reader prototype.
 
 CC      = gcc
-CFLAGS  = -Wall -Wextra -O2
+CFLAGS  = -Wall -Wextra -O2 -I.
 LDLIBS  = -lzip
 
 TARGET  = inky_term
-SRC     = main.c
+SRCS    = main.c \
+          epub/epub.c \
+          html/html.c \
+          layout/layout.c \
+          terminal/terminal.c
 
-$(TARGET): $(SRC)
-	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(LDLIBS)
+OBJS    = $(SRCS:.c=.o)
+
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS) $(LDLIBS)
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(TARGET) $(OBJS)
 
 .PHONY: clean
