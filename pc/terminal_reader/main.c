@@ -1,11 +1,16 @@
 /*
- * Inky terminal EPUB reader - prototype step 2.
+ * Inky terminal EPUB reader - prototype step 3.
  *
- * Goal: open an EPUB, find the first readable chapter, and let the user
- * navigate chapters with the left/right arrow keys. Press 'q' to quit.
+ * Goal: open an EPUB and read it paginated inside the terminal.
  *
- * This is a terminal prototype. The real e-reader will paginate text within
- * a screen-sized area; here we just print one chapter at a time.
+ * Navigation:
+ *   Left/Right arrows  -> previous/next page
+ *   At chapter boundaries, arrows continue into the previous/next chapter
+ *   q                  -> quit
+ *
+ * The layout engine is intentionally abstracted in rows and columns so it can
+ * be reused later with SDL2 (where one cell maps to font metrics) and on the
+ * ESP32 e-ink display.
  */
 
 #include <stdio.h>
@@ -13,7 +18,53 @@
 #include <string.h>
 #include <termios.h>
 #include <unistd.h>
+#include <sys/ioctl.h>
 #include <zip.h>
+
+/*
+ * Layout state.
+ *
+ * The layout engine takes plain text and a column width and breaks it into
+ * wrapped lines. It then groups those lines into pages of a given row height.
+ *
+ * This is intentionally cell-based (rows x cols) rather than pixel-based so
+ * the same engine can later be driven by font metrics on SDL2 / e-ink.
+ */
+typedef struct {
+    char *text;           /* NUL-terminated plain text (owned by layout) */
+    int *line_offsets;    /* byte offset in text where each wrapped line starts */
+    int line_count;       /* number of wrapped lines */
+    int line_capacity;    /* allocated size of line_offsets */
+    int cols;             /* column width used to build the layout */
+} layout_t;
+
+/*
+ * A chapter as listed in the spine: its idref and its path inside the ZIP.
+ */
+typedef struct {
+    char *idref;
+    char *path;
+} chapter_entry_t;
+
+/*
+ * Global-ish state for the reader. We group it so helper functions can load
+ * chapters without needing a dozen parameters.
+ */
+typedef struct {
+    zip_t *archive;
+    chapter_entry_t *chapters;
+    int chapter_count;
+    int current_chapter;
+    int current_page;
+
+    /* Terminal / screen dimensions. */
+    int rows;
+    int cols;
+
+    /* Current chapter content. */
+    char *chapter_text;
+    layout_t *layout;
+} reader_t;
 
 /*
  * Read a file from the ZIP archive into a freshly allocated NUL-terminated
@@ -127,28 +178,6 @@ static int get_xml_attribute(const char *xml, const char *tag_name,
 }
 
 /*
- * Heuristic: is this spine idref front/back matter that should be skipped
- * when searching for the first readable chapter?
- */
-static int is_front_or_back_matter(const char *idref)
-{
-    static const char *skip_prefixes[] = {
-        "cvi", "cov", "tp", "cop", "toc", "map", "col",
-        "ded", "epi", "ack", "ata", "front", "back", "bm",
-        NULL
-    };
-
-    for (int i = 0; skip_prefixes[i] != NULL; i++) {
-        size_t len = strlen(skip_prefixes[i]);
-        if (strncmp(idref, skip_prefixes[i], len) == 0) {
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
-/*
  * Parse META-INF/container.xml to find the path of the package (.opf) file.
  */
 static int find_package_path(zip_t *archive, char *out_path, size_t out_size)
@@ -216,7 +245,7 @@ static int find_manifest_href(const char *opf, const char *idref,
  * On failure returns 0.
  */
 static int build_chapter_list(zip_t *archive, const char *opf_path,
-                              char ***chapters_out)
+                              chapter_entry_t **chapters_out)
 {
     size_t opf_len;
     char *opf = read_zip_file(archive, opf_path, &opf_len);
@@ -252,7 +281,7 @@ static int build_chapter_list(zip_t *archive, const char *opf_path,
         return 0;
     }
 
-    char **chapters = calloc(count, sizeof(char *));
+    chapter_entry_t *chapters = calloc(count, sizeof(chapter_entry_t));
     if (!chapters) {
         free(opf);
         return 0;
@@ -309,7 +338,9 @@ static int build_chapter_list(zip_t *archive, const char *opf_path,
             break;
         }
         sprintf(path, "%s%s", opf_dir, href);
-        chapters[actual++] = path;
+        chapters[actual].path = path;
+        chapters[actual].idref = strdup(idref);
+        actual++;
 
         itemref_pos += 5;
     }
@@ -330,7 +361,7 @@ static int build_chapter_list(zip_t *archive, const char *opf_path,
  *
  * We remove everything inside <tags>, collapse consecutive whitespace,
  * and decode the basic XML entities. Block-level tags (headings, paragraphs)
- * get extra newlines so the output is readable in a terminal.
+ * get extra newlines so the output is readable.
  */
 static void html_to_text(const char *html, char *out, size_t out_size)
 {
@@ -348,10 +379,7 @@ static void html_to_text(const char *html, char *out, size_t out_size)
         if (c == '>') {
             inside_tag = 0;
 
-            /*
-             * Insert blank lines after block-level end tags to make headings
-             * and paragraphs stand apart in the terminal.
-             */
+            /* Insert blank lines after block-level end tags. */
             if (j > 0) {
                 const char *prev = &html[i];
                 int block = 0;
@@ -362,7 +390,7 @@ static void html_to_text(const char *html, char *out, size_t out_size)
                 else if (prev - 3 >= html && strncasecmp(prev - 3, "/h4", 3) == 0) block = 1;
                 else if (prev - 3 >= html && strncasecmp(prev - 3, "/h5", 3) == 0) block = 1;
                 else if (prev - 3 >= html && strncasecmp(prev - 3, "/h6", 3) == 0) block = 1;
-                else if (strncasecmp(prev - 2, "/div", 4) == 0) block = 1;
+                else if (prev - 4 >= html && strncasecmp(prev - 4, "/div", 4) == 0) block = 1;
 
                 if (block) {
                     if (out[j - 1] != '\n') {
@@ -415,40 +443,270 @@ static void html_to_text(const char *html, char *out, size_t out_size)
 }
 
 /*
- * Print a chapter by its index in the chapter list.
- * Clears the terminal first so each chapter appears on a fresh screen.
+ * Create a new empty layout.
  */
-static void print_chapter(zip_t *archive, char **chapters, int chapter_count,
-                          int index)
+static layout_t *layout_new(void)
 {
-    if (index < 0 || index >= chapter_count) {
+    return calloc(1, sizeof(layout_t));
+}
+
+/*
+ * Free all memory owned by a layout.
+ */
+static void layout_free(layout_t *layout)
+{
+    if (!layout) {
+        return;
+    }
+    free(layout->text);
+    free(layout->line_offsets);
+    free(layout);
+}
+
+/*
+ * Append a line offset to the layout, growing the array as needed.
+ */
+static int layout_add_line(layout_t *layout, int offset)
+{
+    if (layout->line_count >= layout->line_capacity) {
+        int new_capacity = layout->line_capacity == 0 ? 256 : layout->line_capacity * 2;
+        int *new_offsets = realloc(layout->line_offsets,
+                                   new_capacity * sizeof(int));
+        if (!new_offsets) {
+            return 0;
+        }
+        layout->line_offsets = new_offsets;
+        layout->line_capacity = new_capacity;
+    }
+
+    layout->line_offsets[layout->line_count++] = offset;
+    return 1;
+}
+
+/*
+ * Build a layout by word-wrapping plain text to a fixed column width.
+ *
+ * We walk through the text one word at a time. A word ends at whitespace.
+ * If adding the next word would exceed the column width, we start a new line.
+ * Newlines in the source text are preserved as forced line breaks.
+ *
+ * Returns 1 on success, 0 on failure.
+ */
+static int layout_build(layout_t *layout, const char *text, int cols)
+{
+    if (!layout || !text || cols <= 0) {
+        return 0;
+    }
+
+    /* Reset any previous content. */
+    free(layout->text);
+    free(layout->line_offsets);
+    layout->text = NULL;
+    layout->line_offsets = NULL;
+    layout->line_count = 0;
+    layout->line_capacity = 0;
+    layout->cols = cols;
+
+    size_t text_len = strlen(text);
+    layout->text = malloc(text_len + 1);
+    if (!layout->text) {
+        return 0;
+    }
+    memcpy(layout->text, text, text_len + 1);
+
+    /* Always start with a first line. */
+    if (!layout_add_line(layout, 0)) {
+        return 0;
+    }
+
+    int line_len = 0;
+    int word_start = -1;
+    int word_len = 0;
+
+    for (int i = 0; layout->text[i] != '\0'; i++) {
+        char c = layout->text[i];
+
+        if (c == '\n') {
+            /* Force a new line at the newline. */
+            layout->text[i] = '\0';
+            if (!layout_add_line(layout, i + 1)) {
+                return 0;
+            }
+            line_len = 0;
+            word_start = -1;
+            word_len = 0;
+            continue;
+        }
+
+        if (c == ' ') {
+            /* End of a word. */
+            if (word_start >= 0) {
+                /*
+                 * If this word doesn't fit on the current line, wrap before
+                 * it. The line we've built so far ends where the word started.
+                 */
+                if (line_len > 0 && line_len + 1 + word_len > cols) {
+                    layout->text[word_start - 1] = '\0';
+                    if (!layout_add_line(layout, word_start)) {
+                        return 0;
+                    }
+                    line_len = word_len;
+                } else {
+                    line_len += 1 + word_len;  /* space + word */
+                }
+                word_start = -1;
+                word_len = 0;
+            }
+            continue;
+        }
+
+        if (word_start < 0) {
+            word_start = i;
+            word_len = 0;
+        }
+        word_len++;
+    }
+
+    /* Handle the final word if the text doesn't end with whitespace. */
+    if (word_start >= 0) {
+        if (line_len > 0 && line_len + 1 + word_len > cols) {
+            layout->text[word_start - 1] = '\0';
+            if (!layout_add_line(layout, word_start)) {
+                return 0;
+            }
+        }
+    }
+
+    return 1;
+}
+
+/*
+ * Return the number of pages for a given row height.
+ * We reserve one row at the top for the status line, so the content area is
+ * rows - 1 lines tall.
+ */
+static int layout_page_count(const layout_t *layout, int rows)
+{
+    if (!layout || rows <= 1) {
+        return 0;
+    }
+    int content_rows = rows - 1;
+    return (layout->line_count + content_rows - 1) / content_rows;
+}
+
+/*
+ * Print one page of the layout.
+ *
+ * The terminal has `rows` rows and `cols` columns. Row 0 is used for a status
+ * line showing the chapter and page. The remaining rows - 1 lines are filled
+ * from the layout.
+ */
+static void layout_render_page(const layout_t *layout, int page, int rows,
+                               const char *chapter_name,
+                               int chapter_index, int chapter_count)
+{
+    if (!layout || rows <= 1 || page < 0 || page >= layout_page_count(layout, rows)) {
         return;
     }
 
-    /* ANSI escape sequence to clear the screen and move cursor to top-left. */
+    /* Clear the screen and move cursor to top-left. */
     printf("\033[2J\033[H");
-    printf("=== Chapter %d / %d: %s ===\n\n", index + 1, chapter_count, chapters[index]);
+
+    int content_rows = rows - 1;
+    int first_line = page * content_rows;
+    int last_line = first_line + content_rows;
+    if (last_line > layout->line_count) {
+        last_line = layout->line_count;
+    }
+
+    /* Status line. */
+    printf("\033[7m %s  |  page %d / %d  |  chapter %d / %d \033[0m\n",
+           chapter_name,
+           page + 1, layout_page_count(layout, rows),
+           chapter_index + 1, chapter_count);
+
+    /* Content lines. */
+    for (int i = first_line; i < last_line; i++) {
+        printf("%s\n", layout->text + layout->line_offsets[i]);
+    }
+
+    /* Clear any remaining rows below the content to avoid old text showing. */
+    for (int i = last_line - first_line; i < content_rows; i++) {
+        printf("\033[K\n");
+    }
+
+    fflush(stdout);
+}
+
+/*
+ * Load a chapter by index into the reader state. This frees the previous
+ * chapter's text and layout, reads the new HTML, converts it to plain text,
+ * and builds a fresh layout.
+ */
+static void reader_load_chapter(reader_t *reader, int index)
+{
+    layout_free(reader->layout);
+    reader->layout = NULL;
+    free(reader->chapter_text);
+    reader->chapter_text = NULL;
+    reader->current_page = 0;
+
+    if (index < 0 || index >= reader->chapter_count) {
+        return;
+    }
 
     size_t chapter_len;
-    char *chapter_html = read_zip_file(archive, chapters[index], &chapter_len);
+    char *chapter_html = read_zip_file(reader->archive,
+                                       reader->chapters[index].path,
+                                       &chapter_len);
     if (!chapter_html) {
-        printf("[Could not read chapter]\n");
+        printf("\033[2J\033[H[Could not read chapter]\n");
         return;
     }
 
-    size_t text_size = chapter_len * 2 + 1;
-    char *text = malloc(text_size);
-    if (!text) {
+    /*
+     * Allocate a text buffer. Plain text after stripping tags is always
+     * shorter than the original HTML, so HTML length + padding is safe.
+     */
+    size_t text_size = chapter_len + 4096;
+    reader->chapter_text = malloc(text_size);
+    if (!reader->chapter_text) {
         free(chapter_html);
-        printf("[Out of memory]\n");
+        printf("\033[2J\033[H[Out of memory]\n");
         return;
     }
 
-    html_to_text(chapter_html, text, text_size);
-    printf("%s\n", text);
-
-    free(text);
+    html_to_text(chapter_html, reader->chapter_text, text_size);
     free(chapter_html);
+
+    reader->layout = layout_new();
+    if (!reader->layout || !layout_build(reader->layout, reader->chapter_text,
+                                         reader->cols)) {
+        layout_free(reader->layout);
+        reader->layout = NULL;
+        printf("\033[2J\033[H[Layout failed]\n");
+        return;
+    }
+}
+
+/*
+ * Rebuild the current chapter layout after a terminal resize.
+ */
+static void reader_relayout(reader_t *reader)
+{
+    if (!reader->chapter_text) {
+        return;
+    }
+
+    layout_free(reader->layout);
+    reader->layout = layout_new();
+    if (reader->layout) {
+        layout_build(reader->layout, reader->chapter_text, reader->cols);
+        int pages = layout_page_count(reader->layout, reader->rows);
+        if (reader->current_page >= pages) {
+            reader->current_page = pages > 0 ? pages - 1 : 0;
+        }
+    }
 }
 
 /*
@@ -481,7 +739,6 @@ static void terminal_setup_raw(void)
  *   Down:  ESC [ B
  *   Right: ESC [ C
  *   Left:  ESC [ D
- * We return simple codes for the caller to interpret.
  */
 #define KEY_QUIT  0
 #define KEY_LEFT  1
@@ -514,6 +771,21 @@ static int read_key(void)
     return KEY_OTHER;
 }
 
+/*
+ * Query the terminal size using the TIOCGWINSZ ioctl.
+ * Returns 1 on success, 0 on failure.
+ */
+static int get_terminal_size(int *rows, int *cols)
+{
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1) {
+        return 0;
+    }
+    *rows = ws.ws_row;
+    *cols = ws.ws_col;
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2) {
@@ -521,9 +793,21 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    reader_t reader = {0};
+
+    if (!get_terminal_size(&reader.rows, &reader.cols)) {
+        reader.rows = 24;
+        reader.cols = 80;
+    }
+
+    if (reader.rows < 3 || reader.cols < 20) {
+        fprintf(stderr, "Terminal is too small (need at least 3x20)\n");
+        return 1;
+    }
+
     int zip_error_code = 0;
-    zip_t *archive = zip_open(argv[1], ZIP_RDONLY, &zip_error_code);
-    if (!archive) {
+    reader.archive = zip_open(argv[1], ZIP_RDONLY, &zip_error_code);
+    if (!reader.archive) {
         fprintf(stderr, "Cannot open '%s' as ZIP (error %d)\n",
                 argv[1], zip_error_code);
         return 1;
@@ -531,46 +815,36 @@ int main(int argc, char **argv)
 
     /* Find the .opf package file. */
     char opf_path[512];
-    if (!find_package_path(archive, opf_path, sizeof(opf_path))) {
-        zip_close(archive);
+    if (!find_package_path(reader.archive, opf_path, sizeof(opf_path))) {
+        zip_close(reader.archive);
         return 1;
     }
 
     /* Build the ordered list of chapter file paths from the spine. */
-    char **chapters = NULL;
-    int chapter_count = build_chapter_list(archive, opf_path, &chapters);
-    if (chapter_count == 0) {
+    reader.chapter_count = build_chapter_list(reader.archive, opf_path,
+                                              &reader.chapters);
+    if (reader.chapter_count == 0) {
         fprintf(stderr, "No readable chapters found\n");
-        zip_close(archive);
+        zip_close(reader.archive);
         return 1;
     }
 
-    /* Find the first chapter that is not front/back matter. */
-    int current = 0;
-    while (current < chapter_count) {
-        /* Extract the idref-ish filename tail to check for front matter. */
-        const char *filename = strrchr(chapters[current], '/');
-        if (!filename) filename = chapters[current];
-        else filename++;
-
-        /*
-         * Simple heuristic: if the filename contains skipped prefixes,
-         * advance. Real front/back detection would need idrefs; this is close
-         * enough for a prototype because filenames usually echo idrefs.
-         */
-        if (is_front_or_back_matter(filename)) {
-            current++;
-        } else {
-            break;
-        }
-    }
+    /* Start at the first chapter of the spine. */
+    reader.current_chapter = 0;
 
     terminal_setup_raw();
-
-    print_chapter(archive, chapters, chapter_count, current);
+    reader_load_chapter(&reader, reader.current_chapter);
 
     int running = 1;
     while (running) {
+        /* Re-render before reading input so resizes take effect. */
+        if (reader.layout) {
+            const char *chapter_name = reader.chapters[reader.current_chapter].idref;
+            layout_render_page(reader.layout, reader.current_page, reader.rows,
+                               chapter_name, reader.current_chapter,
+                               reader.chapter_count);
+        }
+
         int key = read_key();
 
         switch (key) {
@@ -578,33 +852,53 @@ int main(int argc, char **argv)
             running = 0;
             break;
         case KEY_LEFT:
-            if (current > 0) {
-                current--;
-                print_chapter(archive, chapters, chapter_count, current);
+            if (reader.current_page > 0) {
+                reader.current_page--;
+            } else if (reader.current_chapter > 0) {
+                /* Move to the last page of the previous chapter. */
+                reader.current_chapter--;
+                reader_load_chapter(&reader, reader.current_chapter);
+                reader.current_page = layout_page_count(reader.layout, reader.rows) - 1;
+                if (reader.current_page < 0) {
+                    reader.current_page = 0;
+                }
             }
             break;
         case KEY_RIGHT:
-            if (current < chapter_count - 1) {
-                current++;
-                print_chapter(archive, chapters, chapter_count, current);
+            if (reader.layout &&
+                reader.current_page < layout_page_count(reader.layout, reader.rows) - 1) {
+                reader.current_page++;
+            } else if (reader.current_chapter < reader.chapter_count - 1) {
+                /* Move to the first page of the next chapter. */
+                reader.current_chapter++;
+                reader_load_chapter(&reader, reader.current_chapter);
             }
             break;
         default:
-            /* Ignore unknown keys. */
             break;
+        }
+
+        /* Handle terminal resize. */
+        int new_rows, new_cols;
+        if (get_terminal_size(&new_rows, &new_cols)) {
+            if (new_rows != reader.rows || new_cols != reader.cols) {
+                reader.rows = new_rows;
+                reader.cols = new_cols;
+                reader_relayout(&reader);
+            }
         }
     }
 
-    /* Clear screen and show a goodbye message after restoring the terminal. */
-    printf("\033[2J\033[H");
-    printf("Goodbye.\n");
+    printf("\033[2J\033[HGoodbye.\n");
 
-    /* Free the chapter list. */
-    for (int i = 0; i < chapter_count; i++) {
-        free(chapters[i]);
+    layout_free(reader.layout);
+    free(reader.chapter_text);
+    for (int i = 0; i < reader.chapter_count; i++) {
+        free(reader.chapters[i].path);
+        free(reader.chapters[i].idref);
     }
-    free(chapters);
+    free(reader.chapters);
 
-    zip_close(archive);
+    zip_close(reader.archive);
     return 0;
 }
