@@ -3,3 +3,6 @@ inky_term
 
 # Object files
 *.o
+
+# Saved reading progress sidecars
+*.inky-progress

@@ -9,6 +9,7 @@ SRCS    = main.c \
           epub/epub.c \
           html/html.c \
           layout/layout.c \
+          progress/progress.c \
           terminal/terminal.c
 
 OBJS    = $(SRCS:.c=.o)

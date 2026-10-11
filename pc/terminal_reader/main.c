@@ -20,6 +20,7 @@
 #include "epub/epub.h"
 #include "html/html.h"
 #include "layout/layout.h"
+#include "progress/progress.h"
 #include "terminal/terminal.h"
 
 /*
@@ -192,11 +193,36 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Start at the first entry of the book's spine. */
-    reader.current_chapter = 0;
+    /*
+     * Try to resume from saved progress. If no progress file exists, start
+     * at the first entry of the book's spine.
+     */
+    if (!progress_load(argv[1], &reader.current_chapter, &reader.current_page)) {
+        reader.current_chapter = 0;
+        reader.current_page = 0;
+    }
+
+    /* Clamp loaded values to valid ranges in case the EPUB changed. */
+    if (reader.current_chapter < 0) {
+        reader.current_chapter = 0;
+    }
+    if (reader.current_chapter >= reader.epub->chapter_count) {
+        reader.current_chapter = reader.epub->chapter_count - 1;
+    }
 
     terminal_setup_raw();
     reader_load_chapter(&reader, reader.current_chapter);
+
+    /*
+     * After loading the chapter, clamp the page. This matters when resuming
+     * because the saved page may no longer exist after a terminal resize.
+     */
+    if (reader.layout) {
+        int pages = layout_page_count(reader.layout, reader.rows);
+        if (reader.current_page >= pages) {
+            reader.current_page = pages > 0 ? pages - 1 : 0;
+        }
+    }
 
     int running = 1;
     while (running) {
@@ -246,6 +272,12 @@ int main(int argc, char **argv)
             }
         }
     }
+
+    /*
+     * Save progress before exiting. We write the current chapter and page so
+     * the next time this EPUB is opened we can resume reading here.
+     */
+    progress_save(argv[1], reader.current_chapter, reader.current_page);
 
     terminal_clear();
     printf("Goodbye.\n");
