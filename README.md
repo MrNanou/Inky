@@ -1,12 +1,8 @@
 # Inky
 
-A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo
-T5 e-paper board. Inky reads DRM-free EPUBs from a microSD card and syncs
-reading progress with a self-hosted [Kavita](https://www.kavitareader.com/)
-instance.
+A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo T5 e-paper board. Inky reads DRM-free EPUBs from a microSD card and syncs reading progress with a self-hosted [Kavita](https://www.kavitareader.com/) instance.
 
-> **Status:** early prototype. The engine is being developed on Linux with SDL2
-> and will be ported to ESP-IDF once the core is solid.
+> **Status:** early prototype. The engine is being developed on Linux with SDL2 (currently a terminal-based prototype) and will be ported to ESP-IDF once the core is solid.
 
 ## Hardware target
 
@@ -31,20 +27,21 @@ instance.
 
 | Path | Purpose |
 |---|---|
-| `pc/` | SDL2 prototype running on Linux |
+| `pc/terminal_reader/` | Terminal EPUB reader prototype |
+| `pc/sdl_reader/` | SDL2 paginated reader (future) |
 | `esp/` | ESP-IDF firmware (created at porting time) |
 | `shared/` | Platform-independent core: EPUB parser, layout engine, Kavita client |
 | `docs/` | Notes, architecture diagrams, API references |
 
 ## Prototype milestones
 
-1. Hello EPUB: open a book and print the first chapter text.
-2. Text layout: word-wrap and paginate for a fixed screen size.
-3. SDL reader: render pages in a window with Page Up / Page Down.
-4. Kavita auth: log in and fetch the OPDS catalog.
-5. Download + read: pull an EPUB from Kavita and open it.
-6. Progress sync: save and load reading position with Kavita.
-7. Port to ESP-IDF: add e-ink and SD card drivers.
+1. **Hello EPUB** ✅: open a book, extract chapters, print the first one.
+2. **Text layout**: word-wrap and paginate for a fixed screen size.
+3. **SDL reader**: render pages in a window with Page Up / Page Down.
+4. **Kavita auth**: log in and fetch the OPDS catalog.
+5. **Download + read**: pull an EPUB from Kavita and open it.
+6. **Progress sync**: save and load reading position with Kavita.
+7. **Port to ESP-IDF**: add e-ink and SD card drivers.
 
 ## Tech stack
 
@@ -52,28 +49,45 @@ instance.
 |---|---|---|
 | Language | C / C++ | C / C++ |
 | Build system | Makefile | ESP-IDF CMake |
-| Display | SDL2 | GxEPD2 / LOVYANGFX |
+| Display | terminal / SDL2 | GxEPD2 / LOVYANGFX |
 | ZIP / EPUB | libzip / miniz | miniz |
-| XML | tinyxml2 | tinyxml2 or custom |
+| XML | hand-rolled parser | hand-rolled parser |
 | JSON | cJSON | cJSON |
 | HTTP / HTTPS | libcurl | ESP HTTP client |
 | Font | FreeType | FreeType or lighter renderer |
 | Filesystem | POSIX | FATFS / SD card |
 | Tasks | main loop | FreeRTOS tasks |
 
+## Running the terminal reader prototype
+
+The terminal reader opens an EPUB and lets you navigate chapters with the keyboard. It is the first step toward the paginated SDL2 reader.
+
+```bash
+cd pc/terminal_reader
+make
+./inky_term /path/to/book.epub
+```
+
+Controls:
+
+| Key | Action |
+|---|---|
+| `←` (left arrow) | Previous chapter |
+| `→` (right arrow) | Next chapter |
+| `q` | Quit |
+
+The reader skips common front/back matter (cover, title page, copyright, table of contents, maps, colophon) and starts at the first chapter that looks like real content.
+
 ## Development notes
 
-- The PC prototype lets us iterate on parsing, layout, and the UI without
-  flashing hardware.
-- Platform-specific code lives behind clean interfaces so the same core can
-  run on Linux and ESP32.
+- The PC prototype lets us iterate on parsing, layout, and the UI without flashing hardware.
+- Platform-specific code lives behind clean interfaces so the same core can run on Linux and ESP32.
 - Keep EPUBs text-only for the first iterations; image support may come later.
 
 ## Useful resources
 
 - [ESP-IDF docs](https://docs.espressif.com/projects/esp-idf/)
 - [miniz](https://github.com/richgel999/miniz)
-- [tinyxml2](https://github.com/leethomason/tinyxml2)
 - [cJSON](https://github.com/DaveGamble/cJSON)
 - [SDL2](https://www.libsdl.org/)
 - [Kavita API docs](https://www.kavitareader.com/)
