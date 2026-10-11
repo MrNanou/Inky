@@ -45,7 +45,7 @@ int layout_build(layout_t *layout, const char *text, int cols);
 
 /*
  * Return the number of pages for a given row height.
- * One row is reserved for a status line, so the content area is rows - 1.
+ * Two rows are reserved for status lines, so the content area is rows - 2.
  */
 int layout_page_count(const layout_t *layout, int rows);
 

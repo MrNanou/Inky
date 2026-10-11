@@ -123,7 +123,36 @@ typedef struct {
     int chapter_count;
     int page;
     int total_pages;
+    int cols;
 } render_ctx_t;
+
+/*
+ * Draw an ASCII progress bar into `out`. The buffer must be at least `cols + 1`
+ * bytes. The bar uses `cols` character cells total, including the framing
+ * brackets.
+ */
+static void draw_progress_bar(char *out, int cols, int value, int max)
+{
+    if (cols < 3) {
+        out[0] = '\0';
+        return;
+    }
+
+    int fill = 0;
+    if (max > 0) {
+        fill = (value * (cols - 2) + max - 1) / max;
+        if (fill > cols - 2) {
+            fill = cols - 2;
+        }
+    }
+
+    out[0] = '[';
+    for (int i = 0; i < cols - 2; i++) {
+        out[i + 1] = i < fill ? '#' : '-';
+    }
+    out[cols - 1] = ']';
+    out[cols] = '\0';
+}
 
 /*
  * Layout render callback for the terminal.
@@ -136,10 +165,22 @@ static void render_line(int line_number, const char *line_text,
     render_ctx_t *ctx = (render_ctx_t *)user_data;
 
     if (is_status) {
-        printf("\033[7m %s  |  page %d / %d  |  chapter %d / %d \033[0m\n",
+        char chapter_bar[ctx->cols + 1];
+        char book_bar[ctx->cols + 1];
+
+        int chapter_value = ctx->total_pages > 0 ? ctx->page + 1 : 0;
+        int book_value = ctx->chapter_count > 0 ? ctx->chapter_index + 1 : 0;
+
+        draw_progress_bar(chapter_bar, ctx->cols, chapter_value, ctx->total_pages);
+        draw_progress_bar(book_bar, ctx->cols, book_value, ctx->chapter_count);
+
+        printf("\033[7m %s  |  %d / %d pages %s \033[0m\n",
                ctx->chapter_name,
                ctx->page + 1, ctx->total_pages,
-               ctx->chapter_index + 1, ctx->chapter_count);
+               chapter_bar);
+        printf("\033[7m chapter %d / %d %s \033[0m\n",
+               ctx->chapter_index + 1, ctx->chapter_count,
+               book_bar);
     } else {
         printf("%s\n", line_text);
     }
@@ -162,6 +203,7 @@ static void reader_render(reader_t *reader)
         .chapter_count = reader->epub->chapter_count,
         .page = reader->current_page,
         .total_pages = layout_page_count(reader->layout, reader->rows),
+        .cols = reader->cols,
     };
 
     layout_render_page(reader->layout, reader->current_page, reader->rows,
@@ -183,8 +225,8 @@ int main(int argc, char **argv)
         reader.cols = 80;
     }
 
-    if (reader.rows < 3 || reader.cols < 20) {
-        fprintf(stderr, "Terminal is too small (need at least 3x20)\n");
+    if (reader.rows < 4 || reader.cols < 20) {
+        fprintf(stderr, "Terminal is too small (need at least 4x20)\n");
         return 1;
     }
 

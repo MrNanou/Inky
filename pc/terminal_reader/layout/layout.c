@@ -144,19 +144,20 @@ int layout_page_count(const layout_t *layout, int rows)
 void layout_render_page(const layout_t *layout, int page, int rows,
                         layout_render_line_fn callback, void *user_data)
 {
-    if (!layout || rows <= 1 || page < 0 || page >= layout_page_count(layout, rows)) {
+    if (!layout || rows <= 2 || page < 0 || page >= layout_page_count(layout, rows)) {
         return;
     }
 
-    int content_rows = rows - 1;
+    int content_rows = rows - 2;  /* Reserve 2 rows for status lines. */
     int first_line = page * content_rows;
     int last_line = first_line + content_rows;
     if (last_line > layout->line_count) {
         last_line = layout->line_count;
     }
 
-    /* Status line is rendered as line -1. */
+    /* Status lines are rendered as line -1 and -2. */
     callback(-1, "", 1, user_data);
+    callback(-2, "", 1, user_data);
 
     /* Content lines. */
     for (int i = first_line; i < last_line; i++) {
