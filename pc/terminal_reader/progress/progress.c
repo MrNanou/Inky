@@ -2,6 +2,15 @@
  * progress.c
  *
  * Reading progress persistence implementation.
+ *
+ * Progress is stored in a central location rather than as a sidecar next to
+ * the EPUB file. This keeps the user's book directories clean.
+ *
+ * On Linux we use $XDG_STATE_HOME/inky/progress/ (falling back to
+ * ~/.local/state/inky/progress/). Each EPUB gets a file named after a simple
+ * hash of its full path.
+ *
+ * On ESP32 this will later be replaced with NVS or an SD card directory.
  */
 
 #include "progress/progress.h"
@@ -9,19 +18,130 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 /*
- * Build the sidecar path: <epub_path>.inky-progress
+ * Very simple hash of a string. Not cryptographic; just maps paths to short
+ * filenames. Collisions are acceptable for a prototype because the file
+ * contents also store the path.
+ */
+static unsigned long hash_path(const char *path)
+{
+    unsigned long hash = 5381;
+    int c;
+
+    while ((c = (unsigned char)*path++) != '\0') {
+        hash = ((hash << 5) + hash) + c;  /* hash * 33 + c */
+    }
+
+    return hash;
+}
+
+/*
+ * Get the directory that holds progress files.
+ * Uses $XDG_STATE_HOME/inky/progress if set, otherwise ~/.local/state/inky/progress.
+ * The returned buffer is heap-allocated; caller must free.
+ */
+static char *progress_dir_path(void)
+{
+    const char *xdg_state = getenv("XDG_STATE_HOME");
+    const char *home = getenv("HOME");
+    char *dir = NULL;
+
+    if (xdg_state && xdg_state[0] != '\0') {
+        size_t len = strlen(xdg_state) + strlen("/inky/progress") + 1;
+        dir = malloc(len);
+        if (dir) {
+            snprintf(dir, len, "%s/inky/progress", xdg_state);
+        }
+    } else if (home && home[0] != '\0') {
+        size_t len = strlen(home) + strlen("/.local/state/inky/progress") + 1;
+        dir = malloc(len);
+        if (dir) {
+            snprintf(dir, len, "%s/.local/state/inky/progress", home);
+        }
+    }
+
+    return dir;
+}
+
+/*
+ * Create a directory and all its parent directories (like mkdir -p).
+ */
+static int mkdir_recursive(const char *path)
+{
+    if (!path || path[0] == '\0') {
+        return 0;
+    }
+
+    struct stat st;
+    if (stat(path, &st) == 0) {
+        return S_ISDIR(st.st_mode) ? 1 : 0;
+    }
+
+    /*
+     * Make a mutable copy so we can temporarily null-terminate the parent
+     * path.
+     */
+    size_t len = strlen(path) + 1;
+    char *copy = malloc(len);
+    if (!copy) {
+        return 0;
+    }
+    memcpy(copy, path, len);
+
+    /* Find the last separator and recurse on the parent directory. */
+    char *sep = strrchr(copy, '/');
+    if (sep && sep != copy) {
+        *sep = '\0';
+        if (!mkdir_recursive(copy)) {
+            free(copy);
+            return 0;
+        }
+    }
+
+    free(copy);
+
+    return mkdir(path, 0755) == 0 || (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
+}
+
+/*
+ * Ensure the progress directory exists.
+ */
+static int ensure_progress_dir(const char *dir)
+{
+    if (!dir) {
+        return 0;
+    }
+
+    return mkdir_recursive(dir);
+}
+
+/*
+ * Build the full path to the progress file for a given EPUB.
  * The returned buffer is heap-allocated; caller must free.
  */
 static char *progress_file_path(const char *epub_path)
 {
-    size_t len = strlen(epub_path) + strlen(".inky-progress") + 1;
-    char *path = malloc(len);
-    if (!path) {
+    char *dir = progress_dir_path();
+    if (!dir || !ensure_progress_dir(dir)) {
+        free(dir);
         return NULL;
     }
-    snprintf(path, len, "%s.inky-progress", epub_path);
+
+    /* Filename is a hash of the EPUB path plus the .progress extension. */
+    unsigned long h = hash_path(epub_path);
+    size_t len = strlen(dir) + 32;
+    char *path = malloc(len);
+    if (!path) {
+        free(dir);
+        return NULL;
+    }
+
+    snprintf(path, len, "%s/%016lx.progress", dir, h);
+    free(dir);
     return path;
 }
 
@@ -88,6 +208,7 @@ int progress_save(const char *epub_path, int chapter, int page)
         return 0;
     }
 
+    fprintf(file, "# Inky progress for: %s\n", epub_path);
     fprintf(file, "chapter=%d\npage=%d\n", chapter, page);
     fclose(file);
     free(path);
