@@ -36,7 +36,7 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 ## Prototype milestones
 
 1. **Hello EPUB** ✅: open a book, extract chapters, print the first one.
-2. **Text layout**: word-wrap and paginate for a fixed screen size.
+2. **Text layout** ✅: word-wrap and paginate for a fixed screen size.
 3. **SDL reader**: render pages in a window with Page Up / Page Down.
 4. **Kavita auth**: log in and fetch the OPDS catalog.
 5. **Download + read**: pull an EPUB from Kavita and open it.
@@ -72,11 +72,11 @@ Controls:
 
 | Key | Action |
 |---|---|
-| `←` (left arrow) | Previous chapter |
-| `→` (right arrow) | Next chapter |
+| `←` (left arrow) | Previous page |
+| `→` (right arrow) | Next page |
 | `q` | Quit |
 
-The reader skips common front/back matter (cover, title page, copyright, table of contents, maps, colophon) and starts at the first chapter that looks like real content.
+At chapter boundaries, the left/right arrows continue into the previous or next chapter. The reader starts at the first entry of the book's spine.
 
 ## Development notes
 
