@@ -123,6 +123,7 @@ typedef struct {
     int chapter_count;
     int page;
     int total_pages;
+    int rows;
     int cols;
 } render_ctx_t;
 
@@ -144,13 +145,33 @@ static void render_line(int line_number, const char *line_text,
                            ? ((ctx->chapter_index + 1) * 100) / ctx->chapter_count
                            : 0;
 
-        printf("\033[7m %s  %d / %d pages (%d%%) \033[0m\n",
-               ctx->chapter_name,
-               ctx->page + 1, ctx->total_pages,
-               chapter_pct);
-        printf("\033[7m chapter %d / %d  (%d%%) \033[0m\n",
-               ctx->chapter_index + 1, ctx->chapter_count,
-               book_pct);
+        /*
+         * Print status lines at the bottom of the screen using explicit cursor
+         * positioning. Line -1 is the second-to-last row, line -2 is the last.
+         */
+        int status_row = (line_number == -1) ? ctx->rows - 1 : ctx->rows;
+        printf("\033[%d;1H\033[7m", status_row);
+
+        if (line_number == -1) {
+            printf(" Book %d / %d  (%d%%) ",
+                   ctx->chapter_index + 1, ctx->chapter_count,
+                   book_pct);
+        } else {
+            printf(" %s  %d / %d pages (%d%%) ",
+                   ctx->chapter_name,
+                   ctx->page + 1, ctx->total_pages,
+                   chapter_pct);
+        }
+
+        printf("\033[0m");
+
+        /*
+         * Only the very last status line omits the newline so the cursor stays
+         * on the bottom row and the terminal does not scroll past the screen.
+         */
+        if (line_number == -1) {
+            printf("\n");
+        }
     } else {
         printf("%s\n", line_text);
     }
@@ -165,6 +186,7 @@ static void reader_render(reader_t *reader)
         return;
     }
 
+    /* Clear and home cursor before drawing the full screen. */
     terminal_clear();
 
     render_ctx_t ctx = {
@@ -173,11 +195,13 @@ static void reader_render(reader_t *reader)
         .chapter_count = reader->epub->chapter_count,
         .page = reader->current_page,
         .total_pages = layout_page_count(reader->layout, reader->rows),
+        .rows = reader->rows,
         .cols = reader->cols,
     };
 
     layout_render_page(reader->layout, reader->current_page, reader->rows,
                        render_line, &ctx);
+
     fflush(stdout);
 }
 

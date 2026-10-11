@@ -134,10 +134,10 @@ int layout_build(layout_t *layout, const char *text, int cols)
 
 int layout_page_count(const layout_t *layout, int rows)
 {
-    if (!layout || rows <= 1) {
+    if (!layout || rows <= 2) {
         return 0;
     }
-    int content_rows = rows - 1;
+    int content_rows = rows - 2;  /* Reserve 2 rows for status lines. */
     return (layout->line_count + content_rows - 1) / content_rows;
 }
 

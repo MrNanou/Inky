@@ -26,7 +26,7 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 ## Project structure
 
 | Path | Purpose |
-|---|---|
+|---|---|---|
 | `pc/terminal_reader/` | Terminal EPUB reader prototype |
 | `pc/sdl_reader/` | SDL2 paginated reader (future) |
 | `esp/` | ESP-IDF firmware (created at porting time) |
@@ -39,11 +39,12 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 2. **Terminal reader** ✅: word-wrap, paginate, and navigate chapters with left/right arrows.
 3. **Code modularity** ✅: split the monolithic `main.c` into feature-based modules (epub, html, layout, terminal).
 4. **Progress persistence** ✅: remember chapter and page across sessions in `~/.local/state/inky/progress/`.
-5. **SDL reader**: render pages in a window with Page Up / Page Down.
-6. **Kavita auth**: log in and fetch the OPDS catalog.
-7. **Download + read**: pull an EPUB from Kavita and open it.
-8. **Progress sync**: upload and download reading position with Kavita.
-9. **Port to ESP-IDF**: add e-ink and SD card drivers.
+5. **Bottom status bar** ✅: show current chapter page percentage and overall book percentage.
+6. **SDL reader**: render pages in a window with Page Up / Page Down.
+7. **Kavita auth**: log in and fetch the OPDS catalog.
+8. **Download + read**: pull an EPUB from Kavita and open it.
+9. **Progress sync**: upload and download reading position with Kavita.
+10. **Port to ESP-IDF**: add e-ink and SD card drivers.
 
 ## Tech stack
 
@@ -58,7 +59,7 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 | HTTP / HTTPS | libcurl | ESP HTTP client |
 | Font | FreeType | FreeType or lighter renderer |
 | Filesystem | POSIX | FATFS / SD card |
-| Progress storage | `~/.local/state/inky/progress/` | NVS or SD card |
+| Progress storage | `~/.local/state/inky/progress/` | NVS / SD card |
 | Tasks | main loop | FreeRTOS tasks |
 
 ## Running the terminal reader prototype
@@ -80,6 +81,8 @@ Controls:
 | `q` | Quit |
 
 At chapter boundaries, the left/right arrows continue into the previous or next chapter. The reader starts at the first entry of the book's spine, then resumes from the last saved position if one exists.
+
+A status bar at the bottom of the screen shows the current chapter's page percentage and the overall book percentage.
 
 ## Module layout
 

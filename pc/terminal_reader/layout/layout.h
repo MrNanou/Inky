@@ -64,8 +64,9 @@ typedef void (*layout_render_line_fn)(int line_number, const char *line_text,
                                       int is_status, void *user_data);
 
 /*
- * Render a page. The status line is rendered first, then the content lines.
- * The callback receives each line in order.
+ * Render a page. Content lines are rendered first, then the two status lines
+ * at the bottom (passed to the callback with is_status = 1). The callback
+ * receives each line in order.
  */
 void layout_render_page(const layout_t *layout, int page, int rows,
                         layout_render_line_fn callback, void *user_data);
