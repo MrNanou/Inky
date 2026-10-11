@@ -36,12 +36,14 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 ## Prototype milestones
 
 1. **Hello EPUB** ✅: open a book, extract chapters, print the first one.
-2. **Text layout** ✅: word-wrap and paginate for a fixed screen size.
-3. **SDL reader**: render pages in a window with Page Up / Page Down.
-4. **Kavita auth**: log in and fetch the OPDS catalog.
-5. **Download + read**: pull an EPUB from Kavita and open it.
-6. **Progress sync**: save and load reading position with Kavita.
-7. **Port to ESP-IDF**: add e-ink and SD card drivers.
+2. **Terminal reader** ✅: word-wrap, paginate, and navigate chapters with left/right arrows.
+3. **Code modularity** ✅: split the monolithic `main.c` into feature-based modules (epub, html, layout, terminal).
+4. **Progress persistence** ✅: remember chapter and page across sessions in `~/.local/state/inky/progress/`.
+5. **SDL reader**: render pages in a window with Page Up / Page Down.
+6. **Kavita auth**: log in and fetch the OPDS catalog.
+7. **Download + read**: pull an EPUB from Kavita and open it.
+8. **Progress sync**: upload and download reading position with Kavita.
+9. **Port to ESP-IDF**: add e-ink and SD card drivers.
 
 ## Tech stack
 
@@ -56,11 +58,12 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 | HTTP / HTTPS | libcurl | ESP HTTP client |
 | Font | FreeType | FreeType or lighter renderer |
 | Filesystem | POSIX | FATFS / SD card |
+| Progress storage | `~/.local/state/inky/progress/` | NVS or SD card |
 | Tasks | main loop | FreeRTOS tasks |
 
 ## Running the terminal reader prototype
 
-The terminal reader opens an EPUB and lets you navigate chapters with the keyboard. It is the first step toward the paginated SDL2 reader.
+The terminal reader opens an EPUB and lets you navigate pages with the keyboard. It automatically crosses chapter boundaries and resumes reading where you left off.
 
 ```bash
 cd pc/terminal_reader
@@ -76,13 +79,24 @@ Controls:
 | `→` (right arrow) | Next page |
 | `q` | Quit |
 
-At chapter boundaries, the left/right arrows continue into the previous or next chapter. The reader starts at the first entry of the book's spine.
+At chapter boundaries, the left/right arrows continue into the previous or next chapter. The reader starts at the first entry of the book's spine, then resumes from the last saved position if one exists.
+
+## Module layout
+
+| Module | Files | Responsibility |
+|---|---|---|
+| `epub` | `epub/epub.h`, `epub/epub.c` | Open EPUB ZIP, read `container.xml` / `.opf`, build chapter list from spine |
+| `html` | `html/html.h`, `html/html.c` | Strip HTML tags and collapse whitespace into plain text |
+| `layout` | `layout/layout.h`, `layout/layout.c` | Cell-based word-wrap and pagination (`rows × cols`) |
+| `progress` | `progress/progress.h`, `progress/progress.c` | Save/load reading position to XDG state directory |
+| `terminal` | `terminal/terminal.h`, `terminal/terminal.c` | Terminal size, raw input, and keyboard input abstraction |
 
 ## Development notes
 
 - The PC prototype lets us iterate on parsing, layout, and the UI without flashing hardware.
 - Platform-specific code lives behind clean interfaces so the same core can run on Linux and ESP32.
 - Keep EPUBs text-only for the first iterations; image support may come later.
+- Progress files are stored in `$XDG_STATE_HOME/inky/progress/` (usually `~/.local/state/inky/progress/`) rather than as sidecars next to EPUBs, so book directories stay clean.
 
 ## Useful resources
 
