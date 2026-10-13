@@ -1,0 +1,7 @@
+# Build artifacts
+inky_term
+inky_sdl
+*.o
+
+# Saved reading progress sidecars
+*.inky-progress
