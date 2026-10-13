@@ -28,21 +28,10 @@
 #include "terminal/terminal.h"
 
 /*
- * Reader frontend state. Wraps the shared session plus terminal dimensions.
- */
-typedef struct {
-    reader_session_t session;
-
-    /* Screen dimensions. */
-    int rows;
-    int cols;
-} reader_frontend_t;
-
-/*
  * User data passed to the layout render callback.
  */
 typedef struct {
-    const reader_frontend_t *frontend;
+    const reader_session_t *session;
     int total_pages;
 } render_ctx_t;
 
@@ -55,8 +44,7 @@ static void render_line(int line_number, const char *line_text,
     (void)line_number;
 
     render_ctx_t *ctx = (render_ctx_t *)user_data;
-    const reader_frontend_t *rf = ctx->frontend;
-    const reader_session_t *session = &rf->session;
+    const reader_session_t *session = ctx->session;
 
     if (is_status) {
         int chapter_pct = ctx->total_pages > 0
@@ -67,13 +55,20 @@ static void render_line(int line_number, const char *line_text,
                            : 0;
 
         /*
-         * Print status lines at the bottom of the screen using explicit cursor
-         * positioning. Line -1 is the second-to-last row, line -2 is the last.
+         * Two status lines at the very bottom. line_number == -2 is the
+         * first status line (book progress), -1 is the last line (chapter
+         * progress). Use 1-based ANSI row coordinates.
          */
-        int status_row = (line_number == -1) ? rf->rows - 1 : rf->rows;
+        int status_row;
+        if (line_number == -2) {
+            status_row = session->rows - 1;
+        } else {
+            status_row = session->rows;
+        }
+
         printf("\033[%d;1H\033[7m", status_row);
 
-        if (line_number == -1) {
+        if (line_number == -2) {
             printf(" Book %d / %d  (%d%%) ",
                    session->current_chapter + 1, session->epub->chapter_count,
                    book_pct);
@@ -101,25 +96,29 @@ static void render_line(int line_number, const char *line_text,
 /*
  * Render the current page to the terminal.
  */
-static void reader_render(reader_frontend_t *rf)
+static void reader_render(reader_session_t *session)
 {
-    if (!rf->session.layout) {
+    if (!session->layout) {
         return;
     }
 
     /* Clear and home cursor before drawing the full screen. */
     terminal_clear();
 
-    int content_rows = rf->rows - 2;  /* Reserve 2 rows for status. */
-    int total_pages = reader_page_count(&rf->session, content_rows);
+    int content_rows = session->rows - session->status_rows;
+    int total_pages = reader_page_count(session);
 
     render_ctx_t ctx = {
-        .frontend = rf,
+        .session = session,
         .total_pages = total_pages,
     };
 
-    layout_render_page(rf->session.layout, rf->session.current_page, content_rows,
+    layout_render_page(session->layout, session->current_page, content_rows,
                        render_line, &ctx);
+
+    /* Status lines at the bottom. */
+    render_line(-2, "", 1, &ctx);
+    render_line(-1, "", 1, &ctx);
 
     fflush(stdout);
 }
@@ -127,22 +126,22 @@ static void reader_render(reader_frontend_t *rf)
 /*
  * Run the reading loop for one book. Returns when the user closes the book.
  */
-static void run_reader(reader_frontend_t *rf, const char *path)
+static void run_reader(reader_session_t *session, const char *path)
 {
-    if (!reader_open(&rf->session, path)) {
+    if (!reader_open(session, path)) {
         terminal_clear();
         printf("[Could not open %s]\n", path);
         terminal_read_key();
         return;
     }
 
-    rf->session.cols = rf->cols;
-    reader_relayout(&rf->session);
+    session->status_rows = 2;
+    reader_relayout(session);
 
     int reading = 1;
     while (reading) {
         /* Re-render before reading input so resizes take effect. */
-        reader_render(rf);
+        reader_render(session);
 
         int key = terminal_read_key();
 
@@ -151,10 +150,10 @@ static void run_reader(reader_frontend_t *rf, const char *path)
             reading = 0;
             break;
         case KEY_LEFT:
-            reader_navigate(&rf->session, -1);
+            reader_navigate(session, -1);
             break;
         case KEY_RIGHT:
-            reader_navigate(&rf->session, 1);
+            reader_navigate(session, 1);
             break;
         default:
             break;
@@ -163,16 +162,15 @@ static void run_reader(reader_frontend_t *rf, const char *path)
         /* Handle terminal resize. */
         int new_rows, new_cols;
         if (terminal_get_size(&new_rows, &new_cols)) {
-            if (new_rows != rf->rows || new_cols != rf->cols) {
-                rf->rows = new_rows;
-                rf->cols = new_cols;
-                rf->session.cols = rf->cols;
-                reader_relayout(&rf->session);
+            if (new_rows != session->rows || new_cols != session->cols) {
+                session->rows = new_rows;
+                session->cols = new_cols;
+                reader_relayout(session);
             }
         }
     }
 
-    reader_close(&rf->session);
+    reader_close(session);
 }
 
 /*
@@ -281,19 +279,21 @@ static char *run_book_list(int rows, int cols)
 
 int main(int argc, char **argv)
 {
-    reader_frontend_t rf = {0};
+    reader_session_t session = {0};
 
-    if (!terminal_get_size(&rf.rows, &rf.cols)) {
-        rf.rows = 24;
-        rf.cols = 80;
+    reader_init(&session);
+
+    if (!terminal_get_size(&session.rows, &session.cols)) {
+        session.rows = 24;
+        session.cols = 80;
     }
 
-    if (rf.rows < 4 || rf.cols < 20) {
+    if (session.rows < 4 || session.cols < 20) {
         fprintf(stderr, "Terminal is too small (need at least 4x20)\n");
         return 1;
     }
 
-    reader_init(&rf.session);
+    session.status_rows = 2;
     terminal_setup_raw();
 
     char *book_path = NULL;
@@ -301,18 +301,18 @@ int main(int argc, char **argv)
     if (argc >= 2) {
         book_path = strdup(argv[1]);
     } else {
-        book_path = run_book_list(rf.rows, rf.cols);
+        book_path = run_book_list(session.rows, session.cols);
     }
 
     while (book_path != NULL) {
-        run_reader(&rf, book_path);
+        run_reader(&session, book_path);
         free(book_path);
 
         /* After closing a book, return to the list. */
-        book_path = run_book_list(rf.rows, rf.cols);
+        book_path = run_book_list(session.rows, session.cols);
     }
 
-    reader_free(&rf.session);
+    reader_free(&session);
 
     terminal_clear();
     printf("Goodbye.\n");

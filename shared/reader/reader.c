@@ -20,6 +20,7 @@ void reader_init(reader_session_t *session)
         return;
     }
     memset(session, 0, sizeof(*session));
+    session->status_rows = 2;
 }
 
 void reader_free(reader_session_t *session)
@@ -112,7 +113,7 @@ int reader_open(reader_session_t *session, const char *path)
 
     reader_load_chapter(session, session->current_chapter);
     if (session->layout) {
-        int pages = reader_page_count(session, session->layout->line_count);
+        int pages = reader_page_count(session);
         if (session->current_page >= pages) {
             session->current_page = pages > 0 ? pages - 1 : 0;
         }
@@ -154,7 +155,7 @@ void reader_relayout(reader_session_t *session)
     session->layout = layout_new();
     if (session->layout) {
         layout_build(session->layout, session->chapter_text, session->cols);
-        int pages = reader_page_count(session, session->layout->line_count);
+        int pages = reader_page_count(session);
         if (session->current_page >= pages) {
             session->current_page = pages > 0 ? pages - 1 : 0;
         }
@@ -167,7 +168,7 @@ void reader_navigate(reader_session_t *session, int delta)
         return;
     }
 
-    int pages = reader_page_count(session, session->layout->line_count);
+    int pages = reader_page_count(session);
 
     if (delta > 0) {
         if (session->current_page < pages - 1) {
@@ -182,7 +183,7 @@ void reader_navigate(reader_session_t *session, int delta)
         } else if (session->current_chapter > 0) {
             session->current_chapter--;
             reader_load_chapter(session, session->current_chapter);
-            session->current_page = reader_page_count(session, session->layout->line_count) - 1;
+            session->current_page = reader_page_count(session) - 1;
             if (session->current_page < 0) {
                 session->current_page = 0;
             }
@@ -190,11 +191,14 @@ void reader_navigate(reader_session_t *session, int delta)
     }
 }
 
-int reader_page_count(const reader_session_t *session, int content_rows)
+int reader_page_count(const reader_session_t *session)
 {
-    if (!session || !session->layout || content_rows <= 0) {
+    if (!session || !session->layout) {
         return 0;
     }
-
-    return (session->layout->line_count + content_rows - 1) / content_rows;
+    int content_rows = session->rows - session->status_rows;
+    if (content_rows <= 0) {
+        content_rows = 1;
+    }
+    return layout_page_count(session->layout, content_rows);
 }

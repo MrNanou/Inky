@@ -68,7 +68,6 @@ typedef struct {
 
     int cell_w;
     int cell_h;
-    int content_rows;
 } app_t;
 
 /*
@@ -143,8 +142,9 @@ static void reader_open_selected(app_t *app)
         return;
     }
 
-    int cols = (SCREEN_WIDTH - 2 * MARGIN_X) / app->cell_w;
-    app->reader.cols = cols;
+    app->reader.cols = (SCREEN_WIDTH - 2 * MARGIN_X) / app->cell_w;
+    app->reader.rows = (SCREEN_HEIGHT - 2 * MARGIN_Y) / app->cell_h;
+    app->reader.status_rows = (STATUS_HEIGHT + app->cell_h - 1) / app->cell_h;
 
     if (reader_open(&app->reader, app->books[app->selected_book].path)) {
         app->state = STATE_READER;
@@ -218,9 +218,10 @@ static void render_reader(app_t *app)
 
     int y = MARGIN_Y;
 
-    int total_pages = reader_page_count(reader, app->content_rows);
-    int first_line = reader->current_page * app->content_rows;
-    int last_line = first_line + app->content_rows;
+    int content_rows = reader->rows - reader->status_rows;
+    int total_pages = reader_page_count(reader);
+    int first_line = reader->current_page * content_rows;
+    int last_line = first_line + content_rows;
     if (last_line > reader->layout->line_count) {
         last_line = reader->layout->line_count;
     }
@@ -368,8 +369,6 @@ int main(int argc, char **argv)
 
     measure_font(app.font, &app.cell_w, &app.cell_h);
 
-    app.content_rows = (SCREEN_HEIGHT - 2 * MARGIN_Y - STATUS_HEIGHT) / app.cell_h;
-
     /* Load book list. */
     const char *books_dir = find_books_dir();
     app.book_count = book_list_scan(books_dir, &app.books);
@@ -380,8 +379,9 @@ int main(int argc, char **argv)
 
     /* If a path was given on the command line, open it directly. */
     if (argc >= 2) {
-        int cols = (SCREEN_WIDTH - 2 * MARGIN_X) / app.cell_w;
-        app.reader.cols = cols;
+        app.reader.cols = (SCREEN_WIDTH - 2 * MARGIN_X) / app.cell_w;
+        app.reader.rows = (SCREEN_HEIGHT - 2 * MARGIN_Y) / app.cell_h;
+        app.reader.status_rows = (STATUS_HEIGHT + app.cell_h - 1) / app.cell_h;
         if (reader_open(&app.reader, argv[1])) {
             app.state = STATE_READER;
         } else {

@@ -25,7 +25,9 @@ typedef struct {
     char *chapter_text;
     layout_t *layout;
 
-    int cols;  /* Layout columns, set by the frontend. */
+    int cols;       /* Layout columns, set by the frontend. */
+    int rows;       /* Total terminal/screen rows, set by the frontend. */
+    int status_rows;  /* Rows reserved for status/chrome, set by frontend. */
 } reader_session_t;
 
 /*
@@ -62,10 +64,10 @@ void reader_relayout(reader_session_t *session);
 void reader_navigate(reader_session_t *session, int delta);
 
 /*
- * Return the number of pages in the current chapter, given the number of
- * content rows available. The frontend decides how many rows to reserve for
- * status/chrome.
+ * Return the number of pages in the current chapter for the session's
+ * configured content rows (rows - status_rows). The frontend decides how many
+ * rows to reserve for status/chrome.
  */
-int reader_page_count(const reader_session_t *session, int content_rows);
+int reader_page_count(const reader_session_t *session);
 
 #endif
