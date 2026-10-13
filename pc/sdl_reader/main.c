@@ -262,10 +262,15 @@ static void render_list(app_t *app)
     } else {
         for (int i = 0; i < app->book_count; i++) {
             char line[512];
-            if (i == app->selected_book) {
-                snprintf(line, sizeof(line), "> %s", app->books[i].filename);
+            if (app->books[i].has_progress) {
+                snprintf(line, sizeof(line), "%s %s - %d%%",
+                         i == app->selected_book ? ">" : " ",
+                         app->books[i].filename,
+                         app->books[i].progress_pct);
             } else {
-                snprintf(line, sizeof(line), "  %s", app->books[i].filename);
+                snprintf(line, sizeof(line), "%s %s",
+                         i == app->selected_book ? ">" : " ",
+                         app->books[i].filename);
             }
             draw_text_line(app, line, MARGIN_X, y);
             y += app->cell_h;

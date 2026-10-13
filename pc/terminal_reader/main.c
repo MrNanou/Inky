@@ -330,10 +330,18 @@ static void render_book_list(const book_entry_t *entries, int count,
     printf("---------------------\n\n");
 
     for (int i = 0; i < count; i++) {
-        if (i == selected) {
-            printf("\033[7m > %s\033[0m\n", entries[i].filename);
+        char line[512];
+        if (entries[i].has_progress) {
+            snprintf(line, sizeof(line), "%s - %d%%",
+                     entries[i].filename, entries[i].progress_pct);
         } else {
-            printf("   %s\n", entries[i].filename);
+            snprintf(line, sizeof(line), "%s", entries[i].filename);
+        }
+
+        if (i == selected) {
+            printf("\033[7m > %s\033[0m\n", line);
+        } else {
+            printf("   %s\n", line);
         }
     }
 

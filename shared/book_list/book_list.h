@@ -14,6 +14,8 @@
 typedef struct {
     char *path;
     char *filename;
+    int has_progress;   /* 1 if a progress file exists for this book. */
+    int progress_pct;   /* Global book progress percentage, 0-100. */
 } book_entry_t;
 
 /*

@@ -6,6 +6,9 @@
 
 #include "book_list/book_list.h"
 
+#include "../epub/epub.h"
+#include "../progress/progress.h"
+
 #include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -112,6 +115,33 @@ int book_list_scan(const char *dir, book_entry_t **entries)
         }
 
         snprintf(list[count].path, path_len, "%s/%s", dir, entry->d_name);
+
+        /*
+         * Look up saved progress for this book and compute a global percentage.
+         * We briefly open the EPUB to get the chapter count; this is acceptable
+         * for a small local library.
+         */
+        int chapter = 0;
+        int page = 0;
+        list[count].has_progress = progress_load(list[count].path, &chapter, &page);
+        list[count].progress_pct = 0;
+
+        if (list[count].has_progress) {
+            epub_t *epub = epub_open(list[count].path);
+            if (epub) {
+                int total_chapters = epub->chapter_count;
+                if (total_chapters > 0) {
+                    /* Approximate: current chapter over total chapters. */
+                    list[count].progress_pct =
+                        ((chapter + 1) * 100) / total_chapters;
+                    if (list[count].progress_pct > 100) {
+                        list[count].progress_pct = 100;
+                    }
+                }
+                epub_close(epub);
+            }
+        }
+
         count++;
     }
 
