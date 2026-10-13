@@ -2,7 +2,7 @@
 
 A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo T5 e-paper board. Inky reads DRM-free EPUBs from a microSD card and syncs reading progress with a self-hosted [Kavita](https://www.kavitareader.com/) instance.
 
-> **Status:** early prototype. The engine is being developed on Linux with SDL2 (currently a terminal-based prototype) and will be ported to ESP-IDF once the core is solid.
+> **Status:** early prototype. The engine is being developed on Linux with a terminal reader and an SDL2 reader, and will be ported to ESP-IDF once the core is solid.
 
 ## Hardware target
 
@@ -28,10 +28,10 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 | Path | Purpose |
 |---|---|
 | `pc/terminal_reader/` | Terminal EPUB reader prototype |
-| `pc/sdl_reader/` | SDL2 paginated reader (future) |
+| `pc/sdl_reader/` | SDL2 paginated reader |
+| `shared/` | Platform-independent core: EPUB parser, HTML stripper, layout engine, progress persistence, reading session |
 | `esp/` | ESP-IDF firmware (created at porting time) |
-| `shared/` | Platform-independent core: EPUB parser, HTML stripper, layout engine, progress persistence |
-| `docs/` | Notes, architecture diagrams, API references |
+| `docs/` | Notes, architecture diagrams, API references (created when needed) |
 
 ## Prototype milestones
 
@@ -67,6 +67,8 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 
 Both prototypes share the same core engine under `shared/` and use the same progress store (`~/.local/state/inky/progress/`).
 
+Place EPUBs in the project `Books/` folder, or pass a path on the command line.
+
 ### Terminal reader
 
 ```bash
@@ -79,9 +81,11 @@ Controls:
 
 | Key | Action |
 |---|---|
+| `↑` / `↓` (arrows) | Select a book in the library |
+| `Enter` | Open the selected book |
 | `←` (left arrow) | Previous page |
 | `→` (right arrow) | Next page |
-| `q` | Quit |
+| `q` | Close the book and return to the library; press again to quit |
 
 ### SDL reader
 
@@ -97,9 +101,11 @@ Controls:
 
 | Key | Action |
 |---|---|
+| `↑` / `↓` (arrows) | Select a book in the library |
+| `Enter` | Open the selected book |
 | `←` (left arrow) / `Page Up` | Previous page |
 | `→` (right arrow) / `Page Down` / `Space` | Next page |
-| `q` / `Esc` | Quit |
+| `q` / `Esc` | Close the book and return to the library; press again to quit |
 
 At chapter boundaries, the navigation keys continue into the previous or next chapter. The reader starts at the first entry of the book's spine, then resumes from the last saved position if one exists.
 
@@ -109,10 +115,13 @@ A status bar at the bottom of the screen shows the current chapter's page percen
 
 | Module | Files | Responsibility |
 |---|---|---|
+| `books_dir` | `books_dir/books_dir.h`, `books_dir/books_dir.c` | Locate the `Books/` folder relative to the current working directory |
+| `book_list` | `book_list/book_list.h`, `book_list/book_list.c` | Scan `Books/` for `.epub` files and load their saved progress |
 | `epub` | `epub/epub.h`, `epub/epub.c` | Open EPUB ZIP, read `container.xml` / `.opf`, build chapter list from spine |
 | `html` | `html/html.h`, `html/html.c` | Strip HTML tags and collapse whitespace into plain text |
 | `layout` | `layout/layout.h`, `layout/layout.c` | Cell-based word-wrap and pagination (`rows × cols`) |
 | `progress` | `progress/progress.h`, `progress/progress.c` | Save/load reading position to XDG state directory |
+| `reader` | `reader/reader.h`, `reader/reader.c` | Platform-independent reading session: open, close, navigate, relayout |
 | `terminal` | `terminal/terminal.h`, `terminal/terminal.c` | Terminal size, raw input, and keyboard input abstraction |
 
 ## Development notes
@@ -121,6 +130,7 @@ A status bar at the bottom of the screen shows the current chapter's page percen
 - Platform-specific code lives behind clean interfaces so the same core can run on Linux and ESP32.
 - Keep EPUBs text-only for the first iterations; image support may come later.
 - Progress files are stored in `$XDG_STATE_HOME/inky/progress/` (usually `~/.local/state/inky/progress/`) rather than as sidecars next to EPUBs, so book directories stay clean.
+- Makefiles use `-MMD` so editing a header rebuilds the affected files without `make clean`.
 
 ## Useful resources
 

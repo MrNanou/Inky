@@ -51,20 +51,24 @@ int layout_page_count(const layout_t *layout, int content_rows);
 /*
  * Render one page of the layout using a caller-provided callback.
  *
- * For each line that belongs to the page, the callback is invoked with:
+ * For each content line that belongs to the page, the callback is invoked with:
  *   - line_number: the 0-based line index within the layout
  *   - line_text:   the NUL-terminated text of the line
- *   - is_status:   1 if this is the status line, 0 for content lines
+ *   - is_status:   always 0 for content lines rendered by this function
  *
- * The callback should print or draw the line. The layout engine does not
- * clear the screen or move the cursor; that is the caller's responsibility.
+ * Status/chrome lines are the caller's responsibility; the callback may be
+ * reused for them with negative line_number sentinels (e.g. -1 and -2) if the
+ * caller chooses.
+ *
+ * The layout engine does not clear the screen or move the cursor; that is the
+ * caller's responsibility.
  */
 typedef void (*layout_render_line_fn)(int line_number, const char *line_text,
                                       int is_status, void *user_data);
 
 /*
- * Render a page. Content lines are rendered first, then the caller may draw
- * status/chrome separately. The callback receives each content line in order.
+ * Render a page. Content lines are rendered first; status/chrome must be drawn
+ * separately by the caller. The callback receives each content line in order.
  */
 void layout_render_page(const layout_t *layout, int page, int content_rows,
                         layout_render_line_fn callback, void *user_data);

@@ -2,9 +2,7 @@
 inky_term
 inky_sdl
 *.o
-
-# Saved reading progress sidecars
-*.inky-progress
+*.d
 
 # User books (folder must exist, contents ignored)
 Books/*

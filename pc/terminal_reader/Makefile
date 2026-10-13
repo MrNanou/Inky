@@ -2,7 +2,7 @@
 # Builds from the shared core engine plus terminal-specific I/O.
 
 CC      = gcc
-CFLAGS  = -Wall -Wextra -O2 -I. -I../../shared
+CFLAGS  = -Wall -Wextra -O2 -MMD -I. -I../../shared
 LDLIBS  = -lzip
 
 TARGET  = inky_term
@@ -17,11 +17,14 @@ SRCS    = main.c \
           ../../shared/reader/reader.c
 
 OBJS    = $(SRCS:.c=.o)
+DEPS    = $(SRCS:.c=.d)
 
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $(TARGET) $(OBJS) $(LDLIBS)
 
 clean:
-	rm -f $(TARGET) $(OBJS)
+	rm -f $(TARGET) $(OBJS) $(DEPS)
 
 .PHONY: clean
+
+-include $(DEPS)

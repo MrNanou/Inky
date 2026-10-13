@@ -70,10 +70,7 @@ int book_list_scan(const char *dir, book_entry_t **entries)
     struct dirent *entry;
     while ((entry = readdir(d)) != NULL) {
         if (entry->d_type != DT_REG && entry->d_type != DT_UNKNOWN) {
-            /* Skip directories and special files unless type is unknown. */
-            if (entry->d_type != DT_UNKNOWN) {
-                continue;
-            }
+            continue;
         }
 
         if (!ends_with_ignore_case(entry->d_name, ".epub")) {
