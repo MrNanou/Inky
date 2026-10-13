@@ -49,7 +49,7 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 ## Tech stack
 
 | Task | PC prototype | ESP target |
-|---|---|
+|---|---|---|
 | Language | C / C++ | C / C++ |
 | Build system | Makefile | ESP-IDF CMake |
 | Display | terminal / SDL2 | GxEPD2 / LOVYANGFX |
@@ -87,7 +87,7 @@ A status bar at the bottom of the screen shows the current chapter's page percen
 ## Module layout
 
 | Module | Files | Responsibility |
-|---|---|
+|---|---|---|
 | `epub` | `epub/epub.h`, `epub/epub.c` | Open EPUB ZIP, read `container.xml` / `.opf`, build chapter list from spine |
 | `html` | `html/html.h`, `html/html.c` | Strip HTML tags and collapse whitespace into plain text |
 | `layout` | `layout/layout.h`, `layout/layout.c` | Cell-based word-wrap and pagination (`rows × cols`) |
