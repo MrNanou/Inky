@@ -29,7 +29,7 @@ void html_to_text(const char *html, char *out, size_t out_size)
             if (j > 0) {
                 const char *prev = &html[i];
                 int block = 0;
-                if (strncasecmp(prev - 2, "/p", 2) == 0) block = 1;
+                if (prev - 2 >= html && strncasecmp(prev - 2, "/p", 2) == 0) block = 1;
                 else if (prev - 3 >= html && strncasecmp(prev - 3, "/h1", 3) == 0) block = 1;
                 else if (prev - 3 >= html && strncasecmp(prev - 3, "/h2", 3) == 0) block = 1;
                 else if (prev - 3 >= html && strncasecmp(prev - 3, "/h3", 3) == 0) block = 1;
@@ -40,9 +40,13 @@ void html_to_text(const char *html, char *out, size_t out_size)
 
                 if (block) {
                     if (out[j - 1] != '\n') {
+                        if (j + 1 < out_size) {
+                            out[j++] = '\n';
+                        }
+                    }
+                    if (j + 1 < out_size) {
                         out[j++] = '\n';
                     }
-                    out[j++] = '\n';
                     last_was_space = 1;
                 }
             }

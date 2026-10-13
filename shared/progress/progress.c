@@ -164,7 +164,8 @@ int progress_load(const char *epub_path, int *chapter, int *page)
 
     int loaded_chapter = -1;
     int loaded_page = -1;
-    char line[256];
+    int path_matched = 0;
+    char line[2048];
 
     while (fgets(line, sizeof(line), file)) {
         /* Strip trailing newline. */
@@ -173,7 +174,11 @@ int progress_load(const char *epub_path, int *chapter, int *page)
             line[len - 1] = '\0';
         }
 
-        if (strncmp(line, "chapter=", 8) == 0) {
+        if (strncmp(line, "path=", 5) == 0) {
+            if (strcmp(line + 5, epub_path) == 0) {
+                path_matched = 1;
+            }
+        } else if (strncmp(line, "chapter=", 8) == 0) {
             loaded_chapter = atoi(line + 8);
         } else if (strncmp(line, "page=", 5) == 0) {
             loaded_page = atoi(line + 5);
@@ -182,7 +187,7 @@ int progress_load(const char *epub_path, int *chapter, int *page)
 
     fclose(file);
 
-    if (loaded_chapter < 0 || loaded_page < 0) {
+    if (!path_matched || loaded_chapter < 0 || loaded_page < 0) {
         return 0;
     }
 
@@ -208,7 +213,8 @@ int progress_save(const char *epub_path, int chapter, int page)
         return 0;
     }
 
-    fprintf(file, "# Inky progress for: %s\n", epub_path);
+    fprintf(file, "# Inky progress\n");
+    fprintf(file, "path=%s\n", epub_path);
     fprintf(file, "chapter=%d\npage=%d\n", chapter, page);
     fclose(file);
     free(path);

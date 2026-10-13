@@ -6,6 +6,7 @@
 
 #include "epub/epub.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -135,6 +136,112 @@ static int find_manifest_href(const char *opf, const char *idref,
 }
 
 /*
+ * Resolve an href relative to the OPF directory, normalizing '../' segments
+ * and URL-decoding percent-encoded bytes. The result is written into out_path.
+ * Returns 1 on success, 0 on failure.
+ */
+static int resolve_href(const char *opf_dir, const char *href,
+                        char *out_path, size_t out_size)
+{
+    if (!opf_dir || !href || out_size == 0) {
+        return 0;
+    }
+
+    /* Decode percent-encoded characters into a temporary buffer. */
+    char decoded[1024];
+    size_t di = 0;
+    for (size_t i = 0; href[i] != '\0' && di < sizeof(decoded) - 1; i++) {
+        if (href[i] == '%' && isxdigit((unsigned char)href[i + 1]) &&
+            isxdigit((unsigned char)href[i + 2])) {
+            char hex[3] = {href[i + 1], href[i + 2], '\0'};
+            decoded[di++] = (char)strtol(hex, NULL, 16);
+            i += 2;
+        } else {
+            decoded[di++] = href[i];
+        }
+    }
+    decoded[di] = '\0';
+
+    /* Build the initial combined path. */
+    char combined[2048];
+    int n = snprintf(combined, sizeof(combined), "%s%s", opf_dir, decoded);
+    if (n < 0 || (size_t)n >= sizeof(combined)) {
+        return 0;
+    }
+
+    /*
+     * Normalize '..' and '.' segments. Split on '/' and rebuild the path from
+     * the kept components.
+     */
+    char parts[64][512];
+    int part_count = 0;
+
+    char *copy = strdup(combined);
+    if (!copy) {
+        return 0;
+    }
+
+    int leading_slash = (copy[0] == '/');
+
+    char *saveptr = NULL;
+    char *token = strtok_r(copy, "/", &saveptr);
+    while (token != NULL) {
+        if (strcmp(token, ".") == 0) {
+            /* Skip current-directory segments. */
+        } else if (strcmp(token, "..") == 0) {
+            if (part_count > 0) {
+                part_count--;
+            }
+        } else {
+            if (part_count >= (int)(sizeof(parts) / sizeof(parts[0]))) {
+                free(copy);
+                return 0;
+            }
+            size_t len = strlen(token);
+            if (len >= sizeof(parts[0])) {
+                len = sizeof(parts[0]) - 1;
+            }
+            memcpy(parts[part_count], token, len);
+            parts[part_count][len] = '\0';
+            part_count++;
+        }
+        token = strtok_r(NULL, "/", &saveptr);
+    }
+
+    free(copy);
+
+    /* Reconstruct the normalized path. */
+    out_path[0] = '\0';
+    size_t pos = 0;
+
+    for (int i = 0; i < part_count; i++) {
+        size_t len = strlen(parts[i]);
+        size_t needed = len + 1;
+        if (i == 0 && leading_slash) {
+            needed += 1;
+        } else if (i > 0) {
+            needed += 1;
+        }
+
+        if (pos + needed >= out_size) {
+            return 0;
+        }
+
+        if (i == 0 && leading_slash) {
+            out_path[pos++] = '/';
+        } else if (i > 0) {
+            out_path[pos++] = '/';
+        }
+
+        memcpy(out_path + pos, parts[i], len);
+        pos += len;
+        out_path[pos] = '\0';
+    }
+
+    return 1;
+}
+
+/*
  * Read a file from the ZIP archive into a freshly allocated NUL-terminated
  * buffer. Returns a pointer to the buffer and writes its size (without the
  * extra NUL byte) into *out_len. The caller must free() the buffer.
@@ -222,6 +329,17 @@ static int build_chapter_list(zip_t *archive, const char *opf_path,
         return 0;
     }
 
+    /* Resolve the OPF directory once. */
+    char opf_dir[512];
+    strncpy(opf_dir, opf_path, sizeof(opf_dir) - 1);
+    opf_dir[sizeof(opf_dir) - 1] = '\0';
+    char *last_slash = strrchr(opf_dir, '/');
+    if (last_slash) {
+        last_slash[1] = '\0';
+    } else {
+        opf_dir[0] = '\0';
+    }
+
     int actual = 0;
     itemref_pos = spine_pos;
     while ((itemref_pos = strstr(itemref_pos, "<itemref")) != NULL) {
@@ -250,24 +368,26 @@ static int build_chapter_list(zip_t *archive, const char *opf_path,
             continue;
         }
 
-        /* Resolve href relative to the .opf directory. */
-        char opf_dir[512];
-        strncpy(opf_dir, opf_path, sizeof(opf_dir) - 1);
-        opf_dir[sizeof(opf_dir) - 1] = '\0';
-        char *last_slash = strrchr(opf_dir, '/');
-        if (last_slash) {
-            last_slash[1] = '\0';
-        } else {
-            opf_dir[0] = '\0';
+        char resolved[1024];
+        if (!resolve_href(opf_dir, href, resolved, sizeof(resolved))) {
+            fprintf(stderr, "Warning: could not resolve href '%s'\n", href);
+            itemref_pos += 5;
+            continue;
         }
 
-        char *path = malloc(strlen(opf_dir) + strlen(href) + 1);
+        size_t path_len = strlen(resolved);
+        char *path = malloc(path_len + 1);
         if (!path) {
             break;
         }
-        sprintf(path, "%s%s", opf_dir, href);
+        memcpy(path, resolved, path_len + 1);
+
         chapters[actual].path = path;
         chapters[actual].idref = strdup(idref);
+        if (!chapters[actual].idref) {
+            free(path);
+            break;
+        }
         actual++;
 
         itemref_pos += 5;
@@ -305,28 +425,23 @@ epub_t *epub_open(const char *filename)
         return NULL;
     }
 
-    chapter_entry_t *chapters = NULL;
-    int chapter_count = build_chapter_list(archive, opf_path, &chapters);
-    if (chapter_count == 0) {
-        fprintf(stderr, "No readable chapters found\n");
-        zip_close(archive);
-        return NULL;
-    }
-
     epub_t *epub = malloc(sizeof(epub_t));
     if (!epub) {
-        for (int i = 0; i < chapter_count; i++) {
-            free(chapters[i].path);
-            free(chapters[i].idref);
-        }
-        free(chapters);
         zip_close(archive);
         return NULL;
     }
 
     epub->archive = archive;
-    epub->chapters = chapters;
-    epub->chapter_count = chapter_count;
+
+    epub->chapter_count = build_chapter_list(archive, opf_path,
+                                             &epub->chapters);
+    if (epub->chapter_count == 0) {
+        fprintf(stderr, "No readable chapters found in '%s'\n", filename);
+        zip_close(archive);
+        free(epub);
+        return NULL;
+    }
+
     return epub;
 }
 
