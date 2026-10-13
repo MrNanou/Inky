@@ -1,18 +1,20 @@
 # Makefile for the Inky terminal EPUB reader prototype.
+# Builds from the shared core engine plus terminal-specific I/O.
 
 CC      = gcc
-CFLAGS  = -Wall -Wextra -O2 -I.
+CFLAGS  = -Wall -Wextra -O2 -I. -I../../shared
 LDLIBS  = -lzip
 
 TARGET  = inky_term
 SRCS    = main.c \
-          books_dir/books_dir.c \
-          book_list/book_list.c \
-          epub/epub.c \
-          html/html.c \
-          layout/layout.c \
-          progress/progress.c \
-          terminal/terminal.c
+          terminal/terminal.c \
+          ../../shared/books_dir/books_dir.c \
+          ../../shared/book_list/book_list.c \
+          ../../shared/epub/epub.c \
+          ../../shared/html/html.c \
+          ../../shared/layout/layout.c \
+          ../../shared/progress/progress.c \
+          ../../shared/reader/reader.c
 
 OBJS    = $(SRCS:.c=.o)
 

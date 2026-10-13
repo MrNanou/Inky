@@ -11,7 +11,8 @@ SRCS    = main.c \
           ../../shared/epub/epub.c \
           ../../shared/html/html.c \
           ../../shared/layout/layout.c \
-          ../../shared/progress/progress.c
+          ../../shared/progress/progress.c \
+          ../../shared/reader/reader.c
 
 OBJS    = $(SRCS:.c=.o)
 

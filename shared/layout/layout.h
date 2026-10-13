@@ -44,10 +44,9 @@ void layout_free(layout_t *layout);
 int layout_build(layout_t *layout, const char *text, int cols);
 
 /*
- * Return the number of pages for a given row height.
- * Two rows are reserved for status lines, so the content area is rows - 2.
+ * Return the number of pages for a given content row count.
  */
-int layout_page_count(const layout_t *layout, int rows);
+int layout_page_count(const layout_t *layout, int content_rows);
 
 /*
  * Render one page of the layout using a caller-provided callback.
@@ -64,11 +63,10 @@ typedef void (*layout_render_line_fn)(int line_number, const char *line_text,
                                       int is_status, void *user_data);
 
 /*
- * Render a page. Content lines are rendered first, then the two status lines
- * at the bottom (passed to the callback with is_status = 1). The callback
- * receives each line in order.
+ * Render a page. Content lines are rendered first, then the caller may draw
+ * status/chrome separately. The callback receives each content line in order.
  */
-void layout_render_page(const layout_t *layout, int page, int rows,
+void layout_render_page(const layout_t *layout, int page, int content_rows,
                         layout_render_line_fn callback, void *user_data);
 
 #endif

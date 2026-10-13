@@ -1,5 +1,5 @@
 /*
- * Inky SDL2 reader - step 3.
+ * Inky SDL2 reader - step 4.
  *
  * Launched without arguments, shows a selectable list of EPUBs in Books/.
  * Launched with a book path, opens it directly.
@@ -14,7 +14,7 @@
  *   Left arrow  / Page Up           -> previous page
  *   q / Escape                      -> close book and return to book list
  *
- * Reuses the shared engine from the terminal reader.
+ * Reuses the shared engine and reader session from the terminal reader.
  */
 
 #include <SDL2/SDL.h>
@@ -26,10 +26,7 @@
 
 #include "../../shared/books_dir/books_dir.h"
 #include "../../shared/book_list/book_list.h"
-#include "../../shared/epub/epub.h"
-#include "../../shared/html/html.h"
-#include "../../shared/layout/layout.h"
-#include "../../shared/progress/progress.h"
+#include "../../shared/reader/reader.h"
 
 /* Target e-paper resolution for the LilyGo T5 4.7" S3. */
 #define SCREEN_WIDTH  960
@@ -59,12 +56,8 @@ typedef struct {
     int book_count;
     int selected_book;
 
-    /* Reader. */
-    epub_t *epub;
-    int current_chapter;
-    int current_page;
-    char *chapter_text;
-    layout_t *layout;
+    /* Reader session. */
+    reader_session_t reader;
 
     /* SDL. */
     SDL_Window *window;
@@ -75,8 +68,7 @@ typedef struct {
 
     int cell_w;
     int cell_h;
-    int cols;
-    int rows;
+    int content_rows;
 } app_t;
 
 /*
@@ -142,44 +134,6 @@ static void draw_text_line(app_t *app, const char *text, int x, int y)
 }
 
 /*
- * Load a chapter by index into the reader state.
- */
-static void reader_load_chapter(app_t *app, int index)
-{
-    layout_free(app->layout);
-    app->layout = NULL;
-    free(app->chapter_text);
-    app->chapter_text = NULL;
-    app->current_page = 0;
-
-    if (index < 0 || index >= app->epub->chapter_count) {
-        return;
-    }
-
-    const char *path = app->epub->chapters[index].path;
-    size_t chapter_len;
-    char *chapter_html = epub_read_file(app->epub, path, &chapter_len);
-    if (!chapter_html) {
-        return;
-    }
-
-    size_t text_size = chapter_len + 4096;
-    app->chapter_text = malloc(text_size);
-    if (!app->chapter_text) {
-        free(chapter_html);
-        return;
-    }
-
-    html_to_text(chapter_html, app->chapter_text, text_size);
-    free(chapter_html);
-
-    app->layout = layout_new();
-    if (app->layout) {
-        layout_build(app->layout, app->chapter_text, app->cols);
-    }
-}
-
-/*
  * Open the currently selected book.
  */
 static void reader_open_selected(app_t *app)
@@ -189,33 +143,12 @@ static void reader_open_selected(app_t *app)
         return;
     }
 
-    const char *path = app->books[app->selected_book].path;
+    int cols = (SCREEN_WIDTH - 2 * MARGIN_X) / app->cell_w;
+    app->reader.cols = cols;
 
-    app->epub = epub_open(path);
-    if (!app->epub) {
-        return;
+    if (reader_open(&app->reader, app->books[app->selected_book].path)) {
+        app->state = STATE_READER;
     }
-
-    if (!progress_load(path, &app->current_chapter, &app->current_page)) {
-        app->current_chapter = 0;
-        app->current_page = 0;
-    }
-    if (app->current_chapter < 0) {
-        app->current_chapter = 0;
-    }
-    if (app->current_chapter >= app->epub->chapter_count) {
-        app->current_chapter = app->epub->chapter_count - 1;
-    }
-
-    reader_load_chapter(app, app->current_chapter);
-    if (app->layout) {
-        int pages = layout_page_count(app->layout, app->rows);
-        if (app->current_page >= pages) {
-            app->current_page = pages > 0 ? pages - 1 : 0;
-        }
-    }
-
-    app->state = STATE_READER;
 }
 
 /*
@@ -223,21 +156,7 @@ static void reader_open_selected(app_t *app)
  */
 static void reader_close_book(app_t *app)
 {
-    if (app->epub) {
-        progress_save(app->books[app->selected_book].path,
-                      app->current_chapter, app->current_page);
-    }
-
-    layout_free(app->layout);
-    free(app->chapter_text);
-    epub_close(app->epub);
-
-    app->layout = NULL;
-    app->chapter_text = NULL;
-    app->epub = NULL;
-    app->current_chapter = 0;
-    app->current_page = 0;
-
+    reader_close(&app->reader);
     app->state = STATE_LIST;
 }
 
@@ -288,7 +207,9 @@ static void render_list(app_t *app)
  */
 static void render_reader(app_t *app)
 {
-    if (!app->layout) {
+    const reader_session_t *reader = &app->reader;
+
+    if (!reader->layout) {
         return;
     }
 
@@ -297,29 +218,29 @@ static void render_reader(app_t *app)
 
     int y = MARGIN_Y;
 
-    int first_line = app->current_page * app->rows;
-    int last_line = first_line + app->rows;
-    if (last_line > app->layout->line_count) {
-        last_line = app->layout->line_count;
+    int total_pages = reader_page_count(reader, app->content_rows);
+    int first_line = reader->current_page * app->content_rows;
+    int last_line = first_line + app->content_rows;
+    if (last_line > reader->layout->line_count) {
+        last_line = reader->layout->line_count;
     }
 
-    for (int i = first_line; i < last_line && y + app->cell_h <= SCREEN_HEIGHT - STATUS_HEIGHT; i++) {
-        draw_text_line(app, app->layout->text + app->layout->line_offsets[i], MARGIN_X, y);
+    for (int i = first_line; i < last_line; i++) {
+        draw_text_line(app, reader->layout->text + reader->layout->line_offsets[i], MARGIN_X, y);
         y += app->cell_h;
     }
 
-    int total_pages = layout_page_count(app->layout, app->rows);
-    int chapter_pct = total_pages > 0 ? ((app->current_page + 1) * 100) / total_pages : 0;
-    int book_pct = app->epub->chapter_count > 0
-                       ? ((app->current_chapter + 1) * 100) / app->epub->chapter_count
+    int chapter_pct = total_pages > 0 ? ((reader->current_page + 1) * 100) / total_pages : 0;
+    int book_pct = reader->epub->chapter_count > 0
+                       ? ((reader->current_chapter + 1) * 100) / reader->epub->chapter_count
                        : 0;
 
     char status[256];
     snprintf(status, sizeof(status),
              "%s  |  page %d / %d (%d%%)  |  Book %d / %d (%d%%)",
-             app->epub->chapters[app->current_chapter].idref,
-             app->current_page + 1, total_pages, chapter_pct,
-             app->current_chapter + 1, app->epub->chapter_count, book_pct);
+             reader->epub->chapters[reader->current_chapter].idref,
+             reader->current_page + 1, total_pages, chapter_pct,
+             reader->current_chapter + 1, reader->epub->chapter_count, book_pct);
 
     draw_text_line(app, status, MARGIN_X, SCREEN_HEIGHT - app->cell_h - 4);
 
@@ -380,26 +301,11 @@ static void app_handle_key(app_t *app, SDL_Keycode key)
         case SDLK_RIGHT:
         case SDLK_PAGEDOWN:
         case SDLK_SPACE:
-            if (app->layout &&
-                app->current_page < layout_page_count(app->layout, app->rows) - 1) {
-                app->current_page++;
-            } else if (app->current_chapter < app->epub->chapter_count - 1) {
-                app->current_chapter++;
-                reader_load_chapter(app, app->current_chapter);
-            }
+            reader_navigate(&app->reader, 1);
             break;
         case SDLK_LEFT:
         case SDLK_PAGEUP:
-            if (app->current_page > 0) {
-                app->current_page--;
-            } else if (app->current_chapter > 0) {
-                app->current_chapter--;
-                reader_load_chapter(app, app->current_chapter);
-                app->current_page = layout_page_count(app->layout, app->rows) - 1;
-                if (app->current_page < 0) {
-                    app->current_page = 0;
-                }
-            }
+            reader_navigate(&app->reader, -1);
             break;
         default:
             break;
@@ -421,6 +327,7 @@ int main(int argc, char **argv)
     }
 
     app_t app = {0};
+    reader_init(&app.reader);
 
     app.window = SDL_CreateWindow(
         "Inky SDL Reader",
@@ -461,8 +368,7 @@ int main(int argc, char **argv)
 
     measure_font(app.font, &app.cell_w, &app.cell_h);
 
-    app.cols = (SCREEN_WIDTH - 2 * MARGIN_X) / app.cell_w;
-    app.rows = (SCREEN_HEIGHT - 2 * MARGIN_Y - STATUS_HEIGHT) / app.cell_h;
+    app.content_rows = (SCREEN_HEIGHT - 2 * MARGIN_Y - STATUS_HEIGHT) / app.cell_h;
 
     /* Load book list. */
     const char *books_dir = find_books_dir();
@@ -474,26 +380,10 @@ int main(int argc, char **argv)
 
     /* If a path was given on the command line, open it directly. */
     if (argc >= 2) {
-        app.epub = epub_open(argv[1]);
-        if (app.epub) {
+        int cols = (SCREEN_WIDTH - 2 * MARGIN_X) / app.cell_w;
+        app.reader.cols = cols;
+        if (reader_open(&app.reader, argv[1])) {
             app.state = STATE_READER;
-            if (!progress_load(argv[1], &app.current_chapter, &app.current_page)) {
-                app.current_chapter = 0;
-                app.current_page = 0;
-            }
-            if (app.current_chapter < 0) {
-                app.current_chapter = 0;
-            }
-            if (app.current_chapter >= app.epub->chapter_count) {
-                app.current_chapter = app.epub->chapter_count - 1;
-            }
-            reader_load_chapter(&app, app.current_chapter);
-            if (app.layout) {
-                int pages = layout_page_count(app.layout, app.rows);
-                if (app.current_page >= pages) {
-                    app.current_page = pages > 0 ? pages - 1 : 0;
-                }
-            }
         } else {
             app.state = STATE_LIST;
         }
@@ -516,15 +406,7 @@ int main(int argc, char **argv)
         SDL_Delay(16);
     }
 
-    /* Save progress if a book is still open. */
-    if (app.epub) {
-        const char *path = argc >= 2 ? argv[1] : app.books[app.selected_book].path;
-        progress_save(path, app.current_chapter, app.current_page);
-    }
-
-    layout_free(app.layout);
-    free(app.chapter_text);
-    epub_close(app.epub);
+    reader_free(&app.reader);
     book_list_free(app.books, app.book_count);
 
     TTF_CloseFont(app.font);

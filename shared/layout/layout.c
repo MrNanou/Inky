@@ -132,23 +132,21 @@ int layout_build(layout_t *layout, const char *text, int cols)
     return 1;
 }
 
-int layout_page_count(const layout_t *layout, int rows)
+int layout_page_count(const layout_t *layout, int content_rows)
 {
-    if (!layout || rows <= 2) {
+    if (!layout || content_rows <= 0) {
         return 0;
     }
-    int content_rows = rows - 2;  /* Reserve 2 rows for status lines. */
     return (layout->line_count + content_rows - 1) / content_rows;
 }
 
-void layout_render_page(const layout_t *layout, int page, int rows,
+void layout_render_page(const layout_t *layout, int page, int content_rows,
                         layout_render_line_fn callback, void *user_data)
 {
-    if (!layout || rows <= 2 || page < 0 || page >= layout_page_count(layout, rows)) {
+    if (!layout || content_rows <= 0 || page < 0 || page >= layout_page_count(layout, content_rows)) {
         return;
     }
 
-    int content_rows = rows - 2;  /* Reserve 2 rows for status lines. */
     int first_line = page * content_rows;
     int last_line = first_line + content_rows;
     if (last_line > layout->line_count) {
@@ -164,8 +162,4 @@ void layout_render_page(const layout_t *layout, int page, int rows,
     for (int i = last_line - first_line; i < content_rows; i++) {
         callback(i, "", 0, user_data);
     }
-
-    /* Status lines are rendered at the bottom as line -1 and -2. */
-    callback(-1, "", 1, user_data);
-    callback(-2, "", 1, user_data);
 }

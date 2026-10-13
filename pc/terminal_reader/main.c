@@ -1,5 +1,5 @@
 /*
- * Inky terminal EPUB reader - prototype step 4.
+ * Inky terminal EPUB reader - prototype step 5.
  *
  * Launched without arguments, shows a selectable list of EPUBs in Books/.
  * Launched with a book path, opens it directly.
@@ -22,116 +22,28 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "books_dir/books_dir.h"
 #include "book_list/book_list.h"
-#include "epub/epub.h"
-#include "html/html.h"
-#include "layout/layout.h"
-#include "progress/progress.h"
+#include "books_dir/books_dir.h"
+#include "reader/reader.h"
 #include "terminal/terminal.h"
 
 /*
- * Reader state. Groups the EPUB, the current chapter, the terminal size, and
- * the current chapter's text/layout so helper functions don't need a dozen
- * parameters.
+ * Reader frontend state. Wraps the shared session plus terminal dimensions.
  */
 typedef struct {
-    epub_t *epub;
-    int current_chapter;
-    int current_page;
+    reader_session_t session;
 
     /* Screen dimensions. */
     int rows;
     int cols;
-
-    /* Current chapter content. */
-    char *chapter_text;
-    layout_t *layout;
-} reader_t;
-
-/*
- * Load a chapter by index into the reader state. Frees the previous chapter's
- * text and layout, reads the new HTML, converts it to plain text, and builds a
- * fresh layout.
- */
-static void reader_load_chapter(reader_t *reader, int index)
-{
-    layout_free(reader->layout);
-    reader->layout = NULL;
-    free(reader->chapter_text);
-    reader->chapter_text = NULL;
-    reader->current_page = 0;
-
-    if (index < 0 || index >= reader->epub->chapter_count) {
-        return;
-    }
-
-    const char *path = reader->epub->chapters[index].path;
-    size_t chapter_len;
-    char *chapter_html = epub_read_file(reader->epub, path, &chapter_len);
-    if (!chapter_html) {
-        terminal_clear();
-        printf("[Could not read chapter]\n");
-        return;
-    }
-
-    /*
-     * Allocate a text buffer. Plain text after stripping tags is always
-     * shorter than the original HTML, so HTML length + padding is safe.
-     */
-    size_t text_size = chapter_len + 4096;
-    reader->chapter_text = malloc(text_size);
-    if (!reader->chapter_text) {
-        free(chapter_html);
-        terminal_clear();
-        printf("[Out of memory]\n");
-        return;
-    }
-
-    html_to_text(chapter_html, reader->chapter_text, text_size);
-    free(chapter_html);
-
-    reader->layout = layout_new();
-    if (!reader->layout || !layout_build(reader->layout, reader->chapter_text,
-                                         reader->cols)) {
-        layout_free(reader->layout);
-        reader->layout = NULL;
-        terminal_clear();
-        printf("[Layout failed]\n");
-    }
-}
-
-/*
- * Rebuild the current chapter layout after a terminal resize.
- */
-static void reader_relayout(reader_t *reader)
-{
-    if (!reader->chapter_text) {
-        return;
-    }
-
-    layout_free(reader->layout);
-    reader->layout = layout_new();
-    if (reader->layout) {
-        layout_build(reader->layout, reader->chapter_text, reader->cols);
-        int pages = layout_page_count(reader->layout, reader->rows);
-        if (reader->current_page >= pages) {
-            reader->current_page = pages > 0 ? pages - 1 : 0;
-        }
-    }
-}
+} reader_frontend_t;
 
 /*
  * User data passed to the layout render callback.
  */
 typedef struct {
-    const char *chapter_name;
-    int chapter_index;
-    int chapter_count;
-    int page;
+    const reader_frontend_t *frontend;
     int total_pages;
-    int rows;
-    int cols;
 } render_ctx_t;
 
 /*
@@ -143,30 +55,32 @@ static void render_line(int line_number, const char *line_text,
     (void)line_number;
 
     render_ctx_t *ctx = (render_ctx_t *)user_data;
+    const reader_frontend_t *rf = ctx->frontend;
+    const reader_session_t *session = &rf->session;
 
     if (is_status) {
         int chapter_pct = ctx->total_pages > 0
-                              ? ((ctx->page + 1) * 100) / ctx->total_pages
+                              ? ((session->current_page + 1) * 100) / ctx->total_pages
                               : 0;
-        int book_pct = ctx->chapter_count > 0
-                           ? ((ctx->chapter_index + 1) * 100) / ctx->chapter_count
+        int book_pct = session->epub->chapter_count > 0
+                           ? ((session->current_chapter + 1) * 100) / session->epub->chapter_count
                            : 0;
 
         /*
          * Print status lines at the bottom of the screen using explicit cursor
          * positioning. Line -1 is the second-to-last row, line -2 is the last.
          */
-        int status_row = (line_number == -1) ? ctx->rows - 1 : ctx->rows;
+        int status_row = (line_number == -1) ? rf->rows - 1 : rf->rows;
         printf("\033[%d;1H\033[7m", status_row);
 
         if (line_number == -1) {
             printf(" Book %d / %d  (%d%%) ",
-                   ctx->chapter_index + 1, ctx->chapter_count,
+                   session->current_chapter + 1, session->epub->chapter_count,
                    book_pct);
         } else {
             printf(" %s  %d / %d pages (%d%%) ",
-                   ctx->chapter_name,
-                   ctx->page + 1, ctx->total_pages,
+                   session->epub->chapters[session->current_chapter].idref,
+                   session->current_page + 1, ctx->total_pages,
                    chapter_pct);
         }
 
@@ -187,26 +101,24 @@ static void render_line(int line_number, const char *line_text,
 /*
  * Render the current page to the terminal.
  */
-static void reader_render(reader_t *reader)
+static void reader_render(reader_frontend_t *rf)
 {
-    if (!reader->layout) {
+    if (!rf->session.layout) {
         return;
     }
 
     /* Clear and home cursor before drawing the full screen. */
     terminal_clear();
 
+    int content_rows = rf->rows - 2;  /* Reserve 2 rows for status. */
+    int total_pages = reader_page_count(&rf->session, content_rows);
+
     render_ctx_t ctx = {
-        .chapter_name = reader->epub->chapters[reader->current_chapter].idref,
-        .chapter_index = reader->current_chapter,
-        .chapter_count = reader->epub->chapter_count,
-        .page = reader->current_page,
-        .total_pages = layout_page_count(reader->layout, reader->rows),
-        .rows = reader->rows,
-        .cols = reader->cols,
+        .frontend = rf,
+        .total_pages = total_pages,
     };
 
-    layout_render_page(reader->layout, reader->current_page, reader->rows,
+    layout_render_page(rf->session.layout, rf->session.current_page, content_rows,
                        render_line, &ctx);
 
     fflush(stdout);
@@ -215,50 +127,22 @@ static void reader_render(reader_t *reader)
 /*
  * Run the reading loop for one book. Returns when the user closes the book.
  */
-static void run_reader(reader_t *reader, const char *path)
+static void run_reader(reader_frontend_t *rf, const char *path)
 {
-    reader->epub = epub_open(path);
-    if (!reader->epub) {
+    if (!reader_open(&rf->session, path)) {
         terminal_clear();
         printf("[Could not open %s]\n", path);
         terminal_read_key();
         return;
     }
 
-    /*
-     * Try to resume from saved progress. If no progress file exists, start
-     * at the first entry of the book's spine.
-     */
-    if (!progress_load(path, &reader->current_chapter, &reader->current_page)) {
-        reader->current_chapter = 0;
-        reader->current_page = 0;
-    }
-
-    /* Clamp loaded values to valid ranges in case the EPUB changed. */
-    if (reader->current_chapter < 0) {
-        reader->current_chapter = 0;
-    }
-    if (reader->current_chapter >= reader->epub->chapter_count) {
-        reader->current_chapter = reader->epub->chapter_count - 1;
-    }
-
-    reader_load_chapter(reader, reader->current_chapter);
-
-    /*
-     * After loading the chapter, clamp the page. This matters when resuming
-     * because the saved page may no longer exist after a terminal resize.
-     */
-    if (reader->layout) {
-        int pages = layout_page_count(reader->layout, reader->rows);
-        if (reader->current_page >= pages) {
-            reader->current_page = pages > 0 ? pages - 1 : 0;
-        }
-    }
+    rf->session.cols = rf->cols;
+    reader_relayout(&rf->session);
 
     int reading = 1;
     while (reading) {
         /* Re-render before reading input so resizes take effect. */
-        reader_render(reader);
+        reader_render(rf);
 
         int key = terminal_read_key();
 
@@ -267,27 +151,10 @@ static void run_reader(reader_t *reader, const char *path)
             reading = 0;
             break;
         case KEY_LEFT:
-            if (reader->current_page > 0) {
-                reader->current_page--;
-            } else if (reader->current_chapter > 0) {
-                /* Move to the last page of the previous chapter. */
-                reader->current_chapter--;
-                reader_load_chapter(reader, reader->current_chapter);
-                reader->current_page = layout_page_count(reader->layout, reader->rows) - 1;
-                if (reader->current_page < 0) {
-                    reader->current_page = 0;
-                }
-            }
+            reader_navigate(&rf->session, -1);
             break;
         case KEY_RIGHT:
-            if (reader->layout &&
-                reader->current_page < layout_page_count(reader->layout, reader->rows) - 1) {
-                reader->current_page++;
-            } else if (reader->current_chapter < reader->epub->chapter_count - 1) {
-                /* Move to the first page of the next chapter. */
-                reader->current_chapter++;
-                reader_load_chapter(reader, reader->current_chapter);
-            }
+            reader_navigate(&rf->session, 1);
             break;
         default:
             break;
@@ -296,35 +163,24 @@ static void run_reader(reader_t *reader, const char *path)
         /* Handle terminal resize. */
         int new_rows, new_cols;
         if (terminal_get_size(&new_rows, &new_cols)) {
-            if (new_rows != reader->rows || new_cols != reader->cols) {
-                reader->rows = new_rows;
-                reader->cols = reader->cols;
-                reader_relayout(reader);
+            if (new_rows != rf->rows || new_cols != rf->cols) {
+                rf->rows = new_rows;
+                rf->cols = new_cols;
+                rf->session.cols = rf->cols;
+                reader_relayout(&rf->session);
             }
         }
     }
 
-    /*
-     * Save progress before closing the book.
-     */
-    progress_save(path, reader->current_chapter, reader->current_page);
-
-    layout_free(reader->layout);
-    free(reader->chapter_text);
-    epub_close(reader->epub);
-    reader->layout = NULL;
-    reader->chapter_text = NULL;
-    reader->epub = NULL;
+    reader_close(&rf->session);
 }
 
 /*
  * Render the book list to the terminal.
  */
 static void render_book_list(const book_entry_t *entries, int count,
-                             int selected, int rows, int cols)
+                             int selected, int rows)
 {
-    (void)cols;
-
     terminal_clear();
     printf("Inky - Select a book\n");
     printf("---------------------\n\n");
@@ -368,6 +224,8 @@ static void render_book_list(const book_entry_t *entries, int count,
  */
 static char *run_book_list(int rows, int cols)
 {
+    (void)cols;
+
     const char *books_dir = find_books_dir();
     if (!books_dir) {
         terminal_clear();
@@ -389,7 +247,7 @@ static char *run_book_list(int rows, int cols)
     char *result = NULL;
 
     while (running) {
-        render_book_list(entries, count, selected, rows, cols);
+        render_book_list(entries, count, selected, rows);
 
         int key = terminal_read_key();
         switch (key) {
@@ -423,18 +281,19 @@ static char *run_book_list(int rows, int cols)
 
 int main(int argc, char **argv)
 {
-    reader_t reader = {0};
+    reader_frontend_t rf = {0};
 
-    if (!terminal_get_size(&reader.rows, &reader.cols)) {
-        reader.rows = 24;
-        reader.cols = 80;
+    if (!terminal_get_size(&rf.rows, &rf.cols)) {
+        rf.rows = 24;
+        rf.cols = 80;
     }
 
-    if (reader.rows < 4 || reader.cols < 20) {
+    if (rf.rows < 4 || rf.cols < 20) {
         fprintf(stderr, "Terminal is too small (need at least 4x20)\n");
         return 1;
     }
 
+    reader_init(&rf.session);
     terminal_setup_raw();
 
     char *book_path = NULL;
@@ -442,16 +301,18 @@ int main(int argc, char **argv)
     if (argc >= 2) {
         book_path = strdup(argv[1]);
     } else {
-        book_path = run_book_list(reader.rows, reader.cols);
+        book_path = run_book_list(rf.rows, rf.cols);
     }
 
     while (book_path != NULL) {
-        run_reader(&reader, book_path);
+        run_reader(&rf, book_path);
         free(book_path);
 
         /* After closing a book, return to the list. */
-        book_path = run_book_list(reader.rows, reader.cols);
+        book_path = run_book_list(rf.rows, rf.cols);
     }
+
+    reader_free(&rf.session);
 
     terminal_clear();
     printf("Goodbye.\n");
