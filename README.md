@@ -30,7 +30,7 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 | `pc/terminal_reader/` | Terminal EPUB reader prototype |
 | `pc/sdl_reader/` | SDL2 paginated reader (future) |
 | `esp/` | ESP-IDF firmware (created at porting time) |
-| `shared/` | Platform-independent core: EPUB parser, layout engine, Kavita client |
+| `shared/` | Platform-independent core: EPUB parser, HTML stripper, layout engine, progress persistence |
 | `docs/` | Notes, architecture diagrams, API references |
 
 ## Prototype milestones
@@ -40,7 +40,7 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 3. **Code modularity** ✅: split the monolithic `main.c` into feature-based modules (epub, html, layout, terminal).
 4. **Progress persistence** ✅: remember chapter and page across sessions in `~/.local/state/inky/progress/`.
 5. **Bottom status bar** ✅: show current chapter page percentage and overall book percentage.
-6. **SDL reader**: render pages in a window with Page Up / Page Down.
+6. **SDL reader** ✅: render pages in a 960x540 SDL2 window with keyboard navigation.
 7. **Kavita auth**: log in and fetch the OPDS catalog.
 8. **Download + read**: pull an EPUB from Kavita and open it.
 9. **Progress sync**: upload and download reading position with Kavita.
@@ -62,9 +62,11 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 | Progress storage | `~/.local/state/inky/progress/` | NVS / SD card |
 | Tasks | main loop | FreeRTOS tasks |
 
-## Running the terminal reader prototype
+## Running the prototypes
 
-The terminal reader opens an EPUB and lets you navigate pages with the keyboard. It automatically crosses chapter boundaries and resumes reading where you left off.
+Both prototypes share the same core engine under `shared/` and use the same progress store (`~/.local/state/inky/progress/`).
+
+### Terminal reader
 
 ```bash
 cd pc/terminal_reader
@@ -80,7 +82,25 @@ Controls:
 | `→` (right arrow) | Next page |
 | `q` | Quit |
 
-At chapter boundaries, the left/right arrows continue into the previous or next chapter. The reader starts at the first entry of the book's spine, then resumes from the last saved position if one exists.
+### SDL reader
+
+Simulates the 960×540 LilyGo T5 4.7" S3 e-paper display. Uses a monospace font so the cell-based layout engine matches the rendered text.
+
+```bash
+cd pc/sdl_reader
+make
+./inky_sdl /path/to/book.epub
+```
+
+Controls:
+
+| Key | Action |
+|---|---|
+| `←` (left arrow) / `Page Up` | Previous page |
+| `→` (right arrow) / `Page Down` / `Space` | Next page |
+| `q` / `Esc` | Quit |
+
+At chapter boundaries, the navigation keys continue into the previous or next chapter. The reader starts at the first entry of the book's spine, then resumes from the last saved position if one exists.
 
 A status bar at the bottom of the screen shows the current chapter's page percentage and the overall book percentage.
 

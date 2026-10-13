@@ -1,0 +1,5 @@
+# Compiled binary
+inky_sdl
+
+# Object files
+*.o
