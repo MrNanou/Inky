@@ -41,10 +41,11 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 4. **Progress persistence** ✅: remember chapter and page across sessions in `~/.local/state/inky/progress/`.
 5. **Bottom status bar** ✅: show current chapter page percentage and overall book percentage.
 6. **SDL reader** ✅: render pages in a 960x540 SDL2 window with keyboard navigation.
-7. **Kavita auth**: log in and fetch the OPDS catalog.
-8. **Download + read**: pull an EPUB from Kavita and open it.
-9. **Progress sync**: upload and download reading position with Kavita.
-10. **Port to ESP-IDF**: add e-ink and SD card drivers.
+7. **Book library** ✅: selectable Books/ folder, launch without arguments to pick a book.
+8. **Kavita auth**: log in and fetch the OPDS catalog.
+9. **Download + read**: pull an EPUB from Kavita and open it.
+10. **Progress sync**: upload and download reading position with Kavita.
+11. **Port to ESP-IDF**: add e-ink and SD card drivers.
 
 ## Tech stack
 

@@ -28,7 +28,10 @@ void terminal_restore(void);
 #define KEY_QUIT  0
 #define KEY_LEFT  1
 #define KEY_RIGHT 2
-#define KEY_OTHER 3
+#define KEY_UP    3
+#define KEY_DOWN  4
+#define KEY_ENTER 5
+#define KEY_OTHER 6
 
 /*
  * Read a single key press.

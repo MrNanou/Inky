@@ -5,3 +5,7 @@ inky_sdl
 
 # Saved reading progress sidecars
 *.inky-progress
+
+# User books (folder must exist, contents ignored)
+Books/*
+!Books/.gitkeep

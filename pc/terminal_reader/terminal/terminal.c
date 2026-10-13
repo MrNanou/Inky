@@ -57,6 +57,10 @@ int terminal_read_key(void)
         return KEY_QUIT;
     }
 
+    if (c == '\n' || c == '\r') {
+        return KEY_ENTER;
+    }
+
     /* Escape sequence - try to read the next two bytes. */
     if (c == '\033') {
         char seq[2];
@@ -66,6 +70,8 @@ int terminal_read_key(void)
         if (seq[0] == '[') {
             if (seq[1] == 'C') return KEY_RIGHT;
             if (seq[1] == 'D') return KEY_LEFT;
+            if (seq[1] == 'A') return KEY_UP;
+            if (seq[1] == 'B') return KEY_DOWN;
         }
     }
 

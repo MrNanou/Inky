@@ -6,6 +6,8 @@ LDLIBS  = -lzip
 
 TARGET  = inky_term
 SRCS    = main.c \
+          books_dir/books_dir.c \
+          book_list/book_list.c \
           epub/epub.c \
           html/html.c \
           layout/layout.c \
