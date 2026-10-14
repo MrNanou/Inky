@@ -94,12 +94,21 @@ int reader_open(reader_session_t *session, const char *path)
 
     reader_free(session);
 
-    session->epub = epub_open(path);
+    /*
+     * Normalize the book path so progress is stable regardless of how the
+     * book is opened (CLI absolute path, relative path, or Books/ selection).
+     */
+    char *normalized = realpath(path, NULL);
+    const char *book_path = normalized ? normalized : path;
+
+    session->epub = epub_open(book_path);
     if (!session->epub) {
+        free(normalized);
         return 0;
     }
 
-    session->book_path = strdup(path);
+    session->book_path = strdup(book_path);
+    free(normalized);
 
     if (!progress_load(path, &session->current_chapter, &session->current_page)) {
         session->current_chapter = 0;

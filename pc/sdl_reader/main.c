@@ -1,5 +1,5 @@
 /*
- * Inky SDL2 reader - step 4.
+ * Inky SDL2 reader - step 5.
  *
  * Launched without arguments, shows a selectable list of EPUBs in Books/.
  * Launched with a book path, opens it directly.
@@ -71,6 +71,14 @@ typedef struct {
 } app_t;
 
 /*
+ * User data passed to the layout render callback.
+ */
+typedef struct {
+    app_t *app;
+    int total_pages;
+} sdl_render_ctx_t;
+
+/*
  * Try to load a usable monospace TTF font from common Arch Linux paths.
  */
 static TTF_Font *load_font(int size)
@@ -130,6 +138,40 @@ static void draw_text_line(app_t *app, const char *text, int x, int y)
 
     SDL_DestroyTexture(texture);
     SDL_FreeSurface(surface);
+}
+
+/*
+ * Layout render callback for the SDL reader.
+ */
+static void sdl_render_line(int line_number, const char *line_text,
+                            int is_status, void *user_data)
+{
+    sdl_render_ctx_t *ctx = (sdl_render_ctx_t *)user_data;
+    app_t *app = ctx->app;
+    const reader_session_t *reader = &app->reader;
+
+    if (is_status) {
+        int chapter_pct = ctx->total_pages > 0
+                              ? ((reader->current_page + 1) * 100) / ctx->total_pages
+                              : 0;
+        int book_pct = reader->epub->chapter_count > 0
+                           ? ((reader->current_chapter + 1) * 100) / reader->epub->chapter_count
+                           : 0;
+
+        char status[256];
+        snprintf(status, sizeof(status),
+                 "%s  |  page %d / %d (%d%%)  |  Book %d / %d (%d%%)",
+                 reader->epub->chapters[reader->current_chapter].idref,
+                 reader->current_page + 1, ctx->total_pages, chapter_pct,
+                 reader->current_chapter + 1, reader->epub->chapter_count, book_pct);
+
+        draw_text_line(app, status, MARGIN_X, SCREEN_HEIGHT - app->cell_h - 4);
+    } else {
+        int content_rows = reader->rows - reader->status_rows;
+        int line_in_page = line_number - (reader->current_page * content_rows);
+        int y = MARGIN_Y + line_in_page * app->cell_h;
+        draw_text_line(app, line_text, MARGIN_X, y);
+    }
 }
 
 /*
@@ -225,34 +267,19 @@ static void render_reader(app_t *app)
         return;
     }
 
-    int y = MARGIN_Y;
-
     int content_rows = reader->rows - reader->status_rows;
     int total_pages = reader_page_count(reader);
-    int first_line = reader->current_page * content_rows;
-    int last_line = first_line + content_rows;
-    if (last_line > reader->layout->line_count) {
-        last_line = reader->layout->line_count;
-    }
 
-    for (int i = first_line; i < last_line; i++) {
-        draw_text_line(app, reader->layout->text + reader->layout->line_offsets[i], MARGIN_X, y);
-        y += app->cell_h;
-    }
+    sdl_render_ctx_t ctx = {
+        .app = app,
+        .total_pages = total_pages,
+    };
 
-    int chapter_pct = total_pages > 0 ? ((reader->current_page + 1) * 100) / total_pages : 0;
-    int book_pct = reader->epub->chapter_count > 0
-                       ? ((reader->current_chapter + 1) * 100) / reader->epub->chapter_count
-                       : 0;
+    layout_render_page(reader->layout, reader->current_page, content_rows,
+                       sdl_render_line, &ctx);
 
-    char status[256];
-    snprintf(status, sizeof(status),
-             "%s  |  page %d / %d (%d%%)  |  Book %d / %d (%d%%)",
-             reader->epub->chapters[reader->current_chapter].idref,
-             reader->current_page + 1, total_pages, chapter_pct,
-             reader->current_chapter + 1, reader->epub->chapter_count, book_pct);
-
-    draw_text_line(app, status, MARGIN_X, SCREEN_HEIGHT - app->cell_h - 4);
+    /* Status line at the bottom. */
+    sdl_render_line(-1, "", 1, &ctx);
 
     SDL_RenderPresent(app->renderer);
 }
