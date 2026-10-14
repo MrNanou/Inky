@@ -45,7 +45,7 @@ void reader_free(reader_session_t *session)
  * text/layout, reads the new HTML, converts it to plain text, and builds a
  * fresh layout.
  */
-static void reader_load_chapter(reader_session_t *session, int index)
+static int reader_load_chapter(reader_session_t *session, int index)
 {
     layout_free(session->layout);
     session->layout = NULL;
@@ -54,14 +54,14 @@ static void reader_load_chapter(reader_session_t *session, int index)
     session->current_page = 0;
 
     if (!session->epub || index < 0 || index >= session->epub->chapter_count) {
-        return;
+        return 0;
     }
 
     const char *path = session->epub->chapters[index].path;
     size_t chapter_len;
     char *chapter_html = epub_read_file(session->epub, path, &chapter_len);
     if (!chapter_html) {
-        return;
+        return 0;
     }
 
     /*
@@ -72,7 +72,7 @@ static void reader_load_chapter(reader_session_t *session, int index)
     session->chapter_text = malloc(text_size);
     if (!session->chapter_text) {
         free(chapter_html);
-        return;
+        return 0;
     }
 
     html_to_text(chapter_html, session->chapter_text, text_size);
@@ -82,6 +82,8 @@ static void reader_load_chapter(reader_session_t *session, int index)
     if (session->layout) {
         layout_build(session->layout, session->chapter_text, session->cols);
     }
+
+    return session->layout != NULL && session->layout->line_count > 0;
 }
 
 int reader_open(reader_session_t *session, const char *path)
@@ -175,14 +177,18 @@ void reader_navigate(reader_session_t *session, int delta)
             session->current_page++;
         } else if (session->current_chapter < session->epub->chapter_count - 1) {
             session->current_chapter++;
-            reader_load_chapter(session, session->current_chapter);
+            if (!reader_load_chapter(session, session->current_chapter)) {
+                session->chapter_load_failed = 1;
+            }
         }
     } else {
         if (session->current_page > 0) {
             session->current_page--;
         } else if (session->current_chapter > 0) {
             session->current_chapter--;
-            reader_load_chapter(session, session->current_chapter);
+            if (!reader_load_chapter(session, session->current_chapter)) {
+                session->chapter_load_failed = 1;
+            }
             session->current_page = reader_page_count(session) - 1;
             if (session->current_page < 0) {
                 session->current_page = 0;

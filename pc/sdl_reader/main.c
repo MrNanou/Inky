@@ -209,12 +209,21 @@ static void render_reader(app_t *app)
 {
     const reader_session_t *reader = &app->reader;
 
-    if (!reader->layout) {
-        return;
-    }
-
     SDL_SetRenderDrawColor(app->renderer, app->bg.r, app->bg.g, app->bg.b, app->bg.a);
     SDL_RenderClear(app->renderer);
+
+    if (!reader->layout) {
+        char msg[256];
+        if (reader->chapter_load_failed) {
+            snprintf(msg, sizeof(msg), "Could not load chapter %d",
+                     reader->current_chapter + 1);
+        } else {
+            snprintf(msg, sizeof(msg), "No content to display");
+        }
+        draw_text_line(app, msg, MARGIN_X, MARGIN_Y);
+        SDL_RenderPresent(app->renderer);
+        return;
+    }
 
     int y = MARGIN_Y;
 
@@ -406,7 +415,15 @@ int main(int argc, char **argv)
         SDL_Delay(16);
     }
 
-    reader_free(&app.reader);
+    /*
+     * If a book is open when the window closes (SDL_QUIT), save its progress
+     * before freeing resources. reader_free does not save; reader_close does.
+     */
+    if (app.reader.epub) {
+        reader_close(&app.reader);
+    } else {
+        reader_free(&app.reader);
+    }
     book_list_free(app.books, app.book_count);
 
     TTF_CloseFont(app.font);

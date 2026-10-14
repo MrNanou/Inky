@@ -82,10 +82,13 @@ static void render_line(int line_number, const char *line_text,
         printf("\033[0m");
 
         /*
-         * Only the very last status line omits the newline so the cursor stays
-         * on the bottom row and the terminal does not scroll past the screen.
+         * The first status line (line_number == -2) is followed by a newline
+         * so the second status line is drawn on the next row. The second
+         * status line (line_number == -1) is positioned at the bottom row
+         * with an absolute ANSI cursor command, so it must not emit a newline
+         * (that would scroll the screen).
          */
-        if (line_number == -1) {
+        if (line_number == -2) {
             printf("\n");
         }
     } else {

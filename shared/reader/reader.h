@@ -28,6 +28,8 @@ typedef struct {
     int cols;       /* Layout columns, set by the frontend. */
     int rows;       /* Total terminal/screen rows, set by the frontend. */
     int status_rows;  /* Rows reserved for status/chrome, set by frontend. */
+
+    int chapter_load_failed;  /* Set to 1 if the current chapter failed to load. */
 } reader_session_t;
 
 /*

@@ -147,10 +147,18 @@ static int resolve_href(const char *opf_dir, const char *href,
         return 0;
     }
 
-    /* Decode percent-encoded characters into a temporary buffer. */
-    char decoded[1024];
+    /*
+     * Decode percent-encoded characters into a heap buffer. EPUB paths are
+     * short, so a modest buffer is plenty, and heap allocation keeps stack
+     * usage low for the ESP32 port.
+     */
+    size_t href_len = strlen(href);
+    char *decoded = malloc(href_len + 1);
+    if (!decoded) {
+        return 0;
+    }
     size_t di = 0;
-    for (size_t i = 0; href[i] != '\0' && di < sizeof(decoded) - 1; i++) {
+    for (size_t i = 0; href[i] != '\0'; i++) {
         if (href[i] == '%' && isxdigit((unsigned char)href[i + 1]) &&
             isxdigit((unsigned char)href[i + 2])) {
             char hex[3] = {href[i + 1], href[i + 2], '\0'};
@@ -162,22 +170,32 @@ static int resolve_href(const char *opf_dir, const char *href,
     }
     decoded[di] = '\0';
 
-    /* Build the initial combined path. */
-    char combined[2048];
-    int n = snprintf(combined, sizeof(combined), "%s%s", opf_dir, decoded);
-    if (n < 0 || (size_t)n >= sizeof(combined)) {
+    size_t opf_dir_len = strlen(opf_dir);
+    size_t combined_size = opf_dir_len + di + 1;
+    char *combined = malloc(combined_size);
+    if (!combined) {
+        free(decoded);
+        return 0;
+    }
+    int n = snprintf(combined, combined_size, "%s%s", opf_dir, decoded);
+    if (n < 0 || (size_t)n >= combined_size) {
+        free(decoded);
+        free(combined);
         return 0;
     }
 
     /*
      * Normalize '..' and '.' segments. Split on '/' and rebuild the path from
-     * the kept components.
+     * the kept components. EPUB paths are never deep, so small fixed arrays
+     * are plenty (and ESP32-friendly).
      */
-    char parts[64][512];
+    char parts[16][256];
     int part_count = 0;
 
     char *copy = strdup(combined);
     if (!copy) {
+        free(decoded);
+        free(combined);
         return 0;
     }
 
@@ -195,6 +213,8 @@ static int resolve_href(const char *opf_dir, const char *href,
         } else {
             if (part_count >= (int)(sizeof(parts) / sizeof(parts[0]))) {
                 free(copy);
+                free(combined);
+                free(decoded);
                 return 0;
             }
             size_t len = strlen(token);
@@ -209,6 +229,8 @@ static int resolve_href(const char *opf_dir, const char *href,
     }
 
     free(copy);
+    free(combined);
+    free(decoded);
 
     /* Reconstruct the normalized path. */
     out_path[0] = '\0';
