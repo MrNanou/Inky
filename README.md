@@ -139,3 +139,26 @@ A status bar at the bottom of the screen shows the current chapter's page percen
 - [cJSON](https://github.com/DaveGamble/cJSON)
 - [SDL2](https://www.libsdl.org/)
 - [Kavita API docs](https://www.kavitareader.com/)
+
+## Todo / Next steps
+
+- [ ] Build PC `kavita/` module for OPDS catalog browsing, download, and progress sync.
+- [ ] Add `[Kavita]` virtual entry at the end of the book list to open the catalog.
+- [ ] Kavita authentication via OPDS API key stored in config.
+- [ ] Download EPUBs from Kavita to local `Books/<Series>/<Title>.epub`.
+- [ ] Create `.meta.json` sidecar on download for Kavita-sourced books:
+  - `kavita_volume_id`
+  - `kavita_series_id`
+  - `kavita_chapter_ids` mapping (spine index → Kavita chapter ID)
+- [ ] Push progress to Kavita immediately on closing a Kavita-sourced book.
+- [ ] Pull progress from Kavita on opening a Kavita-sourced book; use whichever is newer by timestamp.
+- [ ] Context menu for downloaded Kavita books: Open / Sync progress / Delete book.
+- [ ] Delete action removes `<Title>.epub`, `<Title>.epub.meta.json`, and any companion files together.
+- [ ] Progress file format: add `updated_at` timestamp field.
+- [ ] Queue progress updates when offline; drain queue on next successful Kavita connection.
+- [ ] On device: Wi-Fi and OpenVPN connect on demand for Kavita operations; disconnect when done.
+- [ ] Abstract `zip_t` out of `shared/epub/epub.h` public API so ESP32 port can use `miniz`.
+
+## Outstanding technical debt
+
+- `zip_t` is exposed in `shared/epub/epub.h`. This must be hidden behind an opaque archive handle before the ESP32 port, where `libzip` will be replaced by `miniz`.
