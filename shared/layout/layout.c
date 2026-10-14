@@ -160,6 +160,6 @@ void layout_render_page(const layout_t *layout, int page, int content_rows,
 
     /* Pad with empty lines to clear old content. */
     for (int i = last_line - first_line; i < content_rows; i++) {
-        callback(i, "", 0, user_data);
+        callback(first_line + i, "", 0, user_data);
     }
 }

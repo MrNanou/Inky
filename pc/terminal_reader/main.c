@@ -41,8 +41,6 @@ typedef struct {
 static void render_line(int line_number, const char *line_text,
                         int is_status, void *user_data)
 {
-    (void)line_number;
-
     render_ctx_t *ctx = (render_ctx_t *)user_data;
     const reader_session_t *session = ctx->session;
 

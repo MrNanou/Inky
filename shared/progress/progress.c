@@ -21,6 +21,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <limits.h>
 
 /*
  * Very simple hash of a string. Not cryptographic; just maps paths to short
@@ -125,14 +126,26 @@ static int ensure_progress_dir(const char *dir)
  */
 static char *progress_file_path(const char *epub_path)
 {
+    if (!epub_path) {
+        return NULL;
+    }
+
+    /*
+     * Normalize the path so save and load use the same key regardless of how
+     * the book was opened (relative path, absolute path, symlink, etc.).
+     */
+    char *normalized = realpath(epub_path, NULL);
+    const char *key_path = normalized ? normalized : epub_path;
+
     char *dir = progress_dir_path();
     if (!dir || !ensure_progress_dir(dir)) {
         free(dir);
+        free(normalized);
         return NULL;
     }
 
     /* Filename is a hash of the EPUB path plus the .progress extension. */
-    unsigned long h = hash_path(epub_path);
+    unsigned long h = hash_path(key_path);
     size_t len = strlen(dir) + 32;
     char *path = malloc(len);
     if (!path) {
@@ -142,6 +155,7 @@ static char *progress_file_path(const char *epub_path)
 
     snprintf(path, len, "%s/%016lx.progress", dir, h);
     free(dir);
+    free(normalized);
     return path;
 }
 
@@ -162,6 +176,13 @@ int progress_load(const char *epub_path, int *chapter, int *page)
         return 0;
     }
 
+    /*
+     * Normalize the caller-provided path so it matches the path stored in
+     * the progress file regardless of how the book was opened.
+     */
+    char *normalized = realpath(epub_path, NULL);
+    const char *verify_path = normalized ? normalized : epub_path;
+
     int loaded_chapter = -1;
     int loaded_page = -1;
     int path_matched = 0;
@@ -175,7 +196,7 @@ int progress_load(const char *epub_path, int *chapter, int *page)
         }
 
         if (strncmp(line, "path=", 5) == 0) {
-            if (strcmp(line + 5, epub_path) == 0) {
+            if (strcmp(line + 5, verify_path) == 0) {
                 path_matched = 1;
             }
         } else if (strncmp(line, "chapter=", 8) == 0) {
@@ -186,6 +207,7 @@ int progress_load(const char *epub_path, int *chapter, int *page)
     }
 
     fclose(file);
+    free(normalized);
 
     if (!path_matched || loaded_chapter < 0 || loaded_page < 0) {
         return 0;
@@ -214,7 +236,16 @@ int progress_save(const char *epub_path, int chapter, int page)
     }
 
     fprintf(file, "# Inky progress\n");
-    fprintf(file, "path=%s\n", epub_path);
+
+    /*
+     * Store the normalized path so progress_load can verify it against any
+     * spelling of the same file.
+     */
+    char *normalized_save = realpath(epub_path, NULL);
+    const char *stored_path = normalized_save ? normalized_save : epub_path;
+    fprintf(file, "path=%s\n", stored_path);
+    free(normalized_save);
+
     fprintf(file, "chapter=%d\npage=%d\n", chapter, page);
     fclose(file);
     free(path);
