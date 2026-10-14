@@ -350,6 +350,55 @@ static void app_handle_key(app_t *app, SDL_Keycode key)
     }
 }
 
+/*
+ * Handle a mouse click or touch event based on application state.
+ *
+ * Reader touch zones:
+ *   Left half of the screen  -> previous page
+ *   Right half of the screen -> next page
+ *   Top edge (y < 60)        -> close book / return to list
+ *
+ * Book-list touch zones:
+ *   Left half  -> select previous book
+ *   Right half -> select next book
+ *   Center     -> open selected book
+ *   Top edge   -> quit
+ */
+static void app_handle_click(app_t *app, int x, int y)
+{
+    if (app->state == STATE_LIST) {
+        if (y < 60) {
+            app->state = STATE_QUIT;
+            return;
+        }
+
+        int third = SCREEN_WIDTH / 3;
+        if (x < third) {
+            if (app->selected_book > 0) {
+                app->selected_book--;
+            }
+        } else if (x >= 2 * third) {
+            if (app->selected_book < app->book_count - 1) {
+                app->selected_book++;
+            }
+        } else {
+            reader_open_selected(app);
+        }
+    } else if (app->state == STATE_READER) {
+        if (y < 60) {
+            reader_close_book(app);
+            return;
+        }
+
+        int half = SCREEN_WIDTH / 2;
+        if (x < half) {
+            reader_navigate(&app->reader, -1);
+        } else {
+            reader_navigate(&app->reader, 1);
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
@@ -435,6 +484,16 @@ int main(int argc, char **argv)
             }
             if (event.type == SDL_KEYDOWN) {
                 app_handle_key(&app, event.key.keysym.sym);
+            }
+            if (event.type == SDL_MOUSEBUTTONDOWN) {
+                if (event.button.button == SDL_BUTTON_LEFT) {
+                    app_handle_click(&app, event.button.x, event.button.y);
+                }
+            }
+            if (event.type == SDL_FINGERDOWN) {
+                int x = (int)(event.tfinger.x * SCREEN_WIDTH);
+                int y = (int)(event.tfinger.y * SCREEN_HEIGHT);
+                app_handle_click(&app, x, y);
             }
         }
 
