@@ -156,6 +156,7 @@ A status bar at the bottom of the screen shows the current chapter's page percen
 - [ ] Delete action removes `<Title>.epub`, `<Title>.epub.meta.json`, and any companion files together.
 - [ ] Progress file format: add `updated_at` timestamp field.
 - [ ] Queue progress updates when offline; drain queue on next successful Kavita connection.
+- [ ] Battery indicator UI element in the top-right status bar (functional on ESP32, placeholder on PC).
 - [ ] On device: Wi-Fi and OpenVPN connect on demand for Kavita operations; disconnect when done.
 - [ ] Abstract `zip_t` out of `shared/epub/epub.h` public API so ESP32 port can use `miniz`.
 
