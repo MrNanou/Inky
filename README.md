@@ -158,8 +158,7 @@ A status bar at the bottom of the screen shows the current chapter's page percen
 - [ ] Queue progress updates when offline; drain queue on next successful Kavita connection.
 - [ ] Battery indicator UI element in the top-right status bar (functional on ESP32, placeholder on PC).
 - [ ] On device: Wi-Fi and OpenVPN connect on demand for Kavita operations; disconnect when done.
-- [ ] Abstract `zip_t` out of `shared/epub/epub.h` public API so ESP32 port can use `miniz`.
 
 ## Outstanding technical debt
 
-- `zip_t` is exposed in `shared/epub/epub.h`. This must be hidden behind an opaque archive handle before the ESP32 port, where `libzip` will be replaced by `miniz`.
+- None currently. The `zip_t` leak has been fixed.
