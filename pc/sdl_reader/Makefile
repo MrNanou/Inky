@@ -7,6 +7,7 @@ LDLIBS  = `sdl2-config --libs` -lSDL2_ttf -lzip
 TARGET  = inky_sdl
 SRCS    = main.c \
           ../../shared/books_dir/books_dir.c \
+          ../../shared/archive/archive.c \
           ../../shared/book_list/book_list.c \
           ../../shared/epub/epub.c \
           ../../shared/html/html.c \

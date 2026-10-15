@@ -11,8 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Forward declaration of internal ZIP reader. */
-static char *read_zip_file(zip_t *archive, const char *filename, size_t *out_len);
+/* Forward declaration of internal archive reader. */
+static char *read_zip_file(inky_archive_t *archive, const char *filename, size_t *out_len);
 
 /*
  * Search for an attribute inside an XML tag and copy its value into out_value.
@@ -82,7 +82,7 @@ static int get_xml_attribute(const char *xml, const char *tag_name,
 /*
  * Parse META-INF/container.xml to find the path of the package (.opf) file.
  */
-static int find_package_path(zip_t *archive, char *out_path, size_t out_size)
+static int find_package_path(inky_archive_t *archive, char *out_path, size_t out_size)
 {
     size_t len;
     char *container = read_zip_file(archive, "META-INF/container.xml", &len);
@@ -268,41 +268,9 @@ static int resolve_href(const char *opf_dir, const char *href,
  * buffer. Returns a pointer to the buffer and writes its size (without the
  * extra NUL byte) into *out_len. The caller must free() the buffer.
  */
-static char *read_zip_file(zip_t *archive, const char *filename, size_t *out_len)
+static char *read_zip_file(inky_archive_t *archive, const char *filename, size_t *out_len)
 {
-    zip_stat_t stat_info;
-    if (zip_stat(archive, filename, 0, &stat_info) != 0) {
-        fprintf(stderr, "Cannot stat '%s' in archive: %s\n",
-                filename, zip_strerror(archive));
-        return NULL;
-    }
-
-    zip_file_t *file = zip_fopen(archive, filename, 0);
-    if (!file) {
-        fprintf(stderr, "Cannot open '%s' in archive\n", filename);
-        return NULL;
-    }
-
-    char *buffer = malloc(stat_info.size + 1);
-    if (!buffer) {
-        zip_fclose(file);
-        return NULL;
-    }
-
-    zip_int64_t read_bytes = zip_fread(file, buffer, stat_info.size);
-    zip_fclose(file);
-
-    if (read_bytes != (zip_int64_t)stat_info.size) {
-        fprintf(stderr, "Failed to read full content of '%s'\n", filename);
-        free(buffer);
-        return NULL;
-    }
-
-    buffer[stat_info.size] = '\0';
-    if (out_len) {
-        *out_len = stat_info.size;
-    }
-    return buffer;
+    return archive_read_file(archive, filename, out_len);
 }
 
 /*
@@ -311,7 +279,7 @@ static char *read_zip_file(zip_t *archive, const char *filename, size_t *out_len
  * We parse the spine, skip items that are not XHTML, resolve each href
  * relative to the .opf directory, and store the resulting paths in an array.
  */
-static int build_chapter_list(zip_t *archive, const char *opf_path,
+static int build_chapter_list(inky_archive_t *archive, const char *opf_path,
                               chapter_entry_t **chapters_out)
 {
     size_t opf_len;
@@ -433,23 +401,20 @@ char *epub_read_file(epub_t *epub, const char *filename, size_t *out_len)
 
 epub_t *epub_open(const char *filename)
 {
-    int zip_error_code = 0;
-    zip_t *archive = zip_open(filename, ZIP_RDONLY, &zip_error_code);
+    inky_archive_t *archive = archive_open(filename);
     if (!archive) {
-        fprintf(stderr, "Cannot open '%s' as ZIP (error %d)\n",
-                filename, zip_error_code);
         return NULL;
     }
 
     char opf_path[512];
     if (!find_package_path(archive, opf_path, sizeof(opf_path))) {
-        zip_close(archive);
+        archive_close(archive);
         return NULL;
     }
 
     epub_t *epub = malloc(sizeof(epub_t));
     if (!epub) {
-        zip_close(archive);
+        archive_close(archive);
         return NULL;
     }
 
@@ -459,7 +424,7 @@ epub_t *epub_open(const char *filename)
                                              &epub->chapters);
     if (epub->chapter_count == 0) {
         fprintf(stderr, "No readable chapters found in '%s'\n", filename);
-        zip_close(archive);
+        archive_close(archive);
         free(epub);
         return NULL;
     }
@@ -482,7 +447,7 @@ void epub_close(epub_t *epub)
     }
 
     if (epub->archive) {
-        zip_close(epub->archive);
+        archive_close(epub->archive);
     }
 
     free(epub);

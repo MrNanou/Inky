@@ -14,7 +14,7 @@
 #ifndef EPUB_H
 #define EPUB_H
 
-#include <zip.h>
+#include "../archive/archive.h"
 #include <stddef.h>
 
 /* One entry from the spine: its idref and its path inside the ZIP. */
@@ -25,7 +25,7 @@ typedef struct {
 
 /* Result of loading an EPUB. */
 typedef struct {
-    zip_t *archive;            /* Owned by epub; closed in epub_close(). */
+    inky_archive_t *archive;   /* Owned by epub; closed in archive_close(). */
     chapter_entry_t *chapters; /* Array, heap allocated. */
     int chapter_count;
 } epub_t;
