@@ -116,6 +116,7 @@ A status bar at the bottom of the screen shows the current chapter's page percen
 | Module | Files | Responsibility |
 |---|---|---|
 | `books_dir` | `books_dir/books_dir.h`, `books_dir/books_dir.c` | Locate the `Books/` folder relative to the current working directory |
+| `archive` | `archive/archive.h`, `archive/archive.c` | Opaque ZIP archive abstraction: libzip on PC, miniz (or similar) on ESP32 |
 | `book_list` | `book_list/book_list.h`, `book_list/book_list.c` | Scan `Books/` for `.epub` files and load their saved progress |
 | `epub` | `epub/epub.h`, `epub/epub.c` | Open EPUB ZIP, read `container.xml` / `.opf`, build chapter list from spine |
 | `html` | `html/html.h`, `html/html.c` | Strip HTML tags and collapse whitespace into plain text |
@@ -128,6 +129,7 @@ A status bar at the bottom of the screen shows the current chapter's page percen
 
 - The PC prototype lets us iterate on parsing, layout, and the UI without flashing hardware.
 - Platform-specific code lives behind clean interfaces so the same core can run on Linux and ESP32.
+- The `archive` module hides the underlying ZIP library. On PC it wraps `libzip`; on ESP32 it will be re-implemented with a smaller library such as `miniz` so the EPUB parser does not depend on a heavy dependency.
 - Keep EPUBs text-only for the first iterations; image support may come later.
 - Progress files are stored in `$XDG_STATE_HOME/inky/progress/` (usually `~/.local/state/inky/progress/`) rather than as sidecars next to EPUBs, so book directories stay clean.
 - Makefiles use `-MMD` so editing a header rebuilds the affected files without `make clean`.
