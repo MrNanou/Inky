@@ -198,8 +198,33 @@ static void reader_open_selected(app_t *app)
  */
 static void reader_close_book(app_t *app)
 {
+    char *previous_path = NULL;
+    if (app->reader.book_path) {
+        previous_path = strdup(app->reader.book_path);
+    }
+
     reader_close(&app->reader);
     app->state = STATE_LIST;
+
+    /* Rescan the book list so progress % is up to date. */
+    book_list_free(app->books, app->book_count);
+    const char *books_dir = find_books_dir();
+    app->book_count = book_list_scan(books_dir, &app->books);
+    if (app->book_count < 0) {
+        app->book_count = 0;
+        app->books = NULL;
+    }
+
+    /* Try to reselect the book that was just closed. */
+    if (previous_path) {
+        for (int i = 0; i < app->book_count; i++) {
+            if (strcmp(app->books[i].path, previous_path) == 0) {
+                app->selected_book = i;
+                break;
+            }
+        }
+        free(previous_path);
+    }
 }
 
 /*
