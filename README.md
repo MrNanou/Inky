@@ -159,7 +159,9 @@ A status bar at the bottom of the screen shows the current chapter's page percen
 - [ ] Progress file format: add `updated_at` timestamp field.
 - [ ] Queue progress updates when offline; drain queue on next successful Kavita connection.
 - [ ] Battery indicator UI element in the top-right status bar (functional on ESP32, placeholder on PC).
-- [ ] On device: Wi-Fi and OpenVPN connect on demand for Kavita operations; disconnect when done.
+- [ ] On device: Wi-Fi connects on demand for Kavita operations; disconnect when done.
+- [ ] Per-network VPN flag in `network.toml` so home LAN connects directly while remote networks use OpenVPN.
+- [ ] PC-first Kavita testing: use `libcurl` and local `Books/` folder against the real Kavita instance before any ESP32 porting.
 
 ## Outstanding technical debt
 
