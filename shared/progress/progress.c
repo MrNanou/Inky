@@ -22,6 +22,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <limits.h>
+#include <time.h>
 
 /*
  * Very simple hash of a string. Not cryptographic; just maps paths to short
@@ -159,10 +160,30 @@ static char *progress_file_path(const char *epub_path)
     return path;
 }
 
-int progress_load(const char *epub_path, int *chapter, int *page)
+
+/*
+ * Format the current UTC time as ISO-8601 into the provided buffer.
+ * Returns 1 on success, 0 on failure.
+ */
+static int format_now_iso8601(char *buffer, size_t size)
+{
+    time_t now = time(NULL);
+    struct tm *tm_info = gmtime(&now);
+    if (!tm_info) {
+        return 0;
+    }
+    return strftime(buffer, size, "%Y-%m-%dT%H:%M:%SZ", tm_info) > 0;
+}
+
+int progress_load_full(const char *epub_path, int *chapter, int *page,
+                       char *updated_at, size_t updated_at_size)
 {
     if (!epub_path || !chapter || !page) {
         return 0;
+    }
+
+    if (updated_at && updated_at_size > 0) {
+        updated_at[0] = '\0';
     }
 
     char *path = progress_file_path(epub_path);
@@ -203,6 +224,10 @@ int progress_load(const char *epub_path, int *chapter, int *page)
             loaded_chapter = atoi(line + 8);
         } else if (strncmp(line, "page=", 5) == 0) {
             loaded_page = atoi(line + 5);
+        } else if (strncmp(line, "updated_at=", 11) == 0) {
+            if (updated_at && updated_at_size > 0) {
+                snprintf(updated_at, updated_at_size, "%s", line + 11);
+            }
         }
     }
 
@@ -218,7 +243,13 @@ int progress_load(const char *epub_path, int *chapter, int *page)
     return 1;
 }
 
-int progress_save(const char *epub_path, int chapter, int page)
+int progress_load(const char *epub_path, int *chapter, int *page)
+{
+    return progress_load_full(epub_path, chapter, page, NULL, 0);
+}
+
+int progress_save_full(const char *epub_path, int chapter, int page,
+                       const char *updated_at)
 {
     if (!epub_path) {
         return 0;
@@ -247,7 +278,22 @@ int progress_save(const char *epub_path, int chapter, int page)
     free(normalized_save);
 
     fprintf(file, "chapter=%d\npage=%d\n", chapter, page);
+
+    if (updated_at && updated_at[0] != '\0') {
+        fprintf(file, "updated_at=%s\n", updated_at);
+    } else {
+        char now[32];
+        if (format_now_iso8601(now, sizeof(now))) {
+            fprintf(file, "updated_at=%s\n", now);
+        }
+    }
+
     fclose(file);
     free(path);
     return 1;
+}
+
+int progress_save(const char *epub_path, int chapter, int page)
+{
+    return progress_save_full(epub_path, chapter, page, NULL);
 }

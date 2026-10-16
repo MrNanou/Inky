@@ -2,7 +2,7 @@
 
 CC      = gcc
 CFLAGS  = -Wall -Wextra -O2 -MMD `sdl2-config --cflags` -I../../shared
-LDLIBS  = `sdl2-config --libs` -lSDL2_ttf -lzip
+LDLIBS  = `sdl2-config --libs` -lSDL2_ttf -lzip -lcjson
 
 TARGET  = inky_sdl
 SRCS    = main.c \

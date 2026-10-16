@@ -1,3 +1,4 @@
+#include <stddef.h>
 /*
  * progress.h
  *
@@ -32,5 +33,14 @@ int progress_load(const char *epub_path, int *chapter, int *page);
  * Returns 1 on success, 0 on failure.
  */
 int progress_save(const char *epub_path, int chapter, int page);
+
+/*
+ * Extended variants that also read/write an ISO-8601 updated_at timestamp.
+ * Pass updated_at == NULL / updated_at_size == 0 to ignore the timestamp.
+ */
+int progress_load_full(const char *epub_path, int *chapter, int *page,
+                       char *updated_at, size_t updated_at_size);
+int progress_save_full(const char *epub_path, int chapter, int page,
+                       const char *updated_at);
 
 #endif

@@ -3,7 +3,7 @@
 
 CC      = gcc
 CFLAGS  = -Wall -Wextra -O2 -MMD -I. -I../../shared
-LDLIBS  = -lzip
+LDLIBS  = -lzip -lcjson
 
 TARGET  = inky_term
 SRCS    = main.c \
