@@ -27,6 +27,7 @@
 #include "../../shared/books_dir/books_dir.h"
 #include "../../shared/book_list/book_list.h"
 #include "../../shared/reader/reader.h"
+#include "../../shared/battery/battery.h"
 
 /* Target e-paper resolution for the LilyGo T5 4.7" S3. */
 #define SCREEN_WIDTH  960
@@ -158,12 +159,15 @@ static void sdl_render_line(int line_number, const char *line_text,
                            ? ((reader->current_chapter + 1) * 100) / reader->epub->chapter_count
                            : 0;
 
+        const char *battery = battery_string(reader->battery_pct);
+
         char status[256];
         snprintf(status, sizeof(status),
-                 "%s  |  page %d / %d (%d%%)  |  Book %d / %d (%d%%)",
+                 "%s  |  page %d / %d (%d%%)  |  Book %d / %d (%d%%)  |  Bat: %s",
                  reader->epub->chapters[reader->current_chapter].idref,
                  reader->current_page + 1, ctx->total_pages, chapter_pct,
-                 reader->current_chapter + 1, reader->epub->chapter_count, book_pct);
+                 reader->current_chapter + 1, reader->epub->chapter_count, book_pct,
+                 battery);
 
         draw_text_line(app, status, MARGIN_X, SCREEN_HEIGHT - app->cell_h - 4);
     } else {
@@ -491,7 +495,7 @@ int main(int argc, char **argv)
     if (argc >= 2) {
         app.reader.cols = (SCREEN_WIDTH - 2 * MARGIN_X) / app.cell_w;
         app.reader.rows = (SCREEN_HEIGHT - 2 * MARGIN_Y) / app.cell_h;
-        app.reader.status_rows = (STATUS_HEIGHT + app.cell_h - 1) / app.cell_h;
+        app.reader.status_rows = 3;
         if (reader_open(&app.reader, argv[1])) {
             app.state = STATE_READER;
         } else {

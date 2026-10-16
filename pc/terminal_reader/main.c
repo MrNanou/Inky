@@ -24,6 +24,7 @@
 
 #include "book_list/book_list.h"
 #include "books_dir/books_dir.h"
+#include "battery/battery.h"
 #include "reader/reader.h"
 #include "terminal/terminal.h"
 
@@ -66,16 +67,32 @@ static void render_line(int line_number, const char *line_text,
 
         printf("\033[%d;1H\033[7m", status_row);
 
+        char status[256];
         if (line_number == -2) {
-            printf(" Book %d / %d  (%d%%) ",
-                   session->current_chapter + 1, session->epub->chapter_count,
-                   book_pct);
+            const char *battery = battery_string(session->battery_pct);
+            snprintf(status, sizeof(status),
+                     "Book %d / %d  (%d%%)  Bat: %s",
+                     session->current_chapter + 1, session->epub->chapter_count,
+                     book_pct, battery);
         } else {
-            printf(" %s  %d / %d pages (%d%%) ",
-                   session->epub->chapters[session->current_chapter].idref,
-                   session->current_page + 1, ctx->total_pages,
-                   chapter_pct);
+            snprintf(status, sizeof(status),
+                     "%s  %d / %d pages (%d%%)",
+                     session->epub->chapters[session->current_chapter].idref,
+                     session->current_page + 1, ctx->total_pages,
+                     chapter_pct);
         }
+
+        /*
+         * Keep the status bar from overflowing and overwriting the content
+         * area when the terminal is narrow.
+         */
+        int max_len = session->cols > 2 ? session->cols - 2 : 1;
+        size_t status_len = strlen(status);
+        if ((int)status_len > max_len) {
+            status[max_len] = '\0';
+        }
+
+        printf(" %s ", status);
 
         printf("\033[0m");
 
@@ -136,7 +153,8 @@ static void run_reader(reader_session_t *session, const char *path)
         return;
     }
 
-    session->status_rows = 2;
+    session->status_rows = 3;
+    session->battery_pct = 100;  /* Placeholder on PC; ESP32 reads ADC. */
     reader_relayout(session);
 
     int reading = 1;

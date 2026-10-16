@@ -30,6 +30,7 @@ typedef struct {
     int status_rows;  /* Rows reserved for status/chrome, set by frontend. */
 
     int chapter_load_failed;  /* Set to 1 if the current chapter failed to load. */
+    int battery_pct;            /* 0-100; set by platform, read by status renderer. */
 } reader_session_t;
 
 /*
