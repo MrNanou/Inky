@@ -29,7 +29,7 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 |---|---|
 | `pc/terminal_reader/` | Terminal EPUB reader prototype |
 | `pc/sdl_reader/` | SDL2 paginated reader |
-| `shared/` | Platform-independent core: EPUB parser, HTML stripper, layout engine, progress persistence, reading session |
+| `shared/` | Platform-independent core: EPUB parser, HTML stripper, layout engine, progress persistence, reading session, Kavita client |
 | `esp/` | ESP-IDF firmware (created at porting time) |
 | `docs/` | Notes, architecture diagrams, API references (created when needed) |
 
@@ -42,8 +42,8 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 5. **Bottom status bar** ✅: show current chapter page percentage and overall book percentage.
 6. **SDL reader** ✅: render pages in a 960x540 SDL2 window with keyboard navigation.
 7. **Book library** ✅: selectable Books/ folder with saved progress shown next to each title.
-8. **Kavita auth**: log in and fetch the OPDS catalog.
-9. **Download + read**: pull an EPUB from Kavita and open it.
+8. **Kavita auth + catalog** ✅: log in with an OPDS API key, browse series, and paginate long catalogs.
+9. **Download + read** ✅: pull an EPUB from Kavita and open it.
 10. **Progress sync**: upload and download reading position with Kavita.
 11. **Port to ESP-IDF**: add e-ink and SD card drivers.
 
@@ -82,9 +82,10 @@ Controls:
 | Key | Action |
 |---|---|
 | `↑` / `↓` (arrows) | Select a book in the library |
-| `Enter` | Open the selected book |
-| `←` (left arrow) | Previous page |
-| `→` (right arrow) | Next page |
+| `Enter` | Open the selected book or `[Kavita]` catalog entry |
+| `←` / `→` (arrows) | Previous / next catalog page (in Kavita lists) |
+| `←` (left arrow) | Previous page (while reading) |
+| `→` (right arrow) | Next page (while reading) |
 | `q` | Close the book and return to the library; press again to quit |
 
 ### SDL reader
@@ -102,14 +103,31 @@ Controls:
 | Key | Action |
 |---|---|
 | `↑` / `↓` (arrows) | Select a book in the library |
-| `Enter` | Open the selected book |
-| `←` (left arrow) / `Page Up` | Previous page |
-| `→` (right arrow) / `Page Down` / `Space` | Next page |
+| `Enter` | Open the selected book or `[Kavita]` catalog entry |
+| `←` / `→` or `Page Up` / `Page Down` | Previous / next catalog page (in Kavita lists) |
+| `←` (left arrow) / `Page Up` | Previous page (while reading) |
+| `→` (right arrow) / `Page Down` / `Space` | Next page (while reading) |
 | `q` / `Esc` | Close the book and return to the library; press again to quit |
 
 At chapter boundaries, the navigation keys continue into the previous or next chapter. The reader starts at the first entry of the book's spine, then resumes from the last saved position if one exists.
 
 A status bar at the bottom of the screen shows the current chapter's page percentage and the overall book percentage.
+
+## Kavita integration
+
+Create `~/.config/inky/kavita.toml`:
+
+```toml
+[kavita]
+url = "http://kavita.home.lan:5000"
+api_key = "..."
+```
+
+Launch the reader without arguments, select `[Kavita]` at the bottom of the book list, and browse:
+
+1. Series list — paginated if the library is large.
+2. Volumes for the selected series.
+3. Downloaded EPUBs are saved to `Books/` with a `.meta.json` sidecar containing `kavita_volume_id` and `kavita_series_id`.
 
 ## Module layout
 
@@ -120,6 +138,7 @@ A status bar at the bottom of the screen shows the current chapter's page percen
 | `book_list` | `book_list/book_list.h`, `book_list/book_list.c` | Scan `Books/` for `.epub` files and load their saved progress |
 | `epub` | `epub/epub.h`, `epub/epub.c` | Open EPUB ZIP, read `container.xml` / `.opf`, build chapter list from spine |
 | `html` | `html/html.h`, `html/html.c` | Strip HTML tags and collapse whitespace into plain text |
+| `kavita` | `kavita/kavita.h`, `kavita/kavita.c` | OPDS config, catalog browsing, streaming download, metadata sidecar |
 | `layout` | `layout/layout.h`, `layout/layout.c` | Cell-based word-wrap and pagination (`rows × cols`) |
 | `progress` | `progress/progress.h`, `progress/progress.c` | Save/load reading position to XDG state directory |
 | `reader` | `reader/reader.h`, `reader/reader.c` | Platform-independent reading session: open, close, navigate, relayout |
@@ -144,14 +163,12 @@ A status bar at the bottom of the screen shows the current chapter's page percen
 
 ## Todo / Next steps
 
-- [ ] Build PC `kavita/` module for OPDS catalog browsing, download, and progress sync.
-- [ ] Add `[Kavita]` virtual entry at the end of the book list to open the catalog.
-- [ ] Kavita authentication via OPDS API key stored in config.
-- [ ] Download EPUBs from Kavita to local `Books/<Series>/<Title>.epub`.
-- [ ] Create `.meta.json` sidecar on download for Kavita-sourced books:
-  - `kavita_volume_id`
-  - `kavita_series_id`
-  - `kavita_chapter_ids` mapping (spine index → Kavita chapter ID)
+- [x] Build PC `kavita/` module for OPDS catalog browsing and download.
+- [x] Add `[Kavita]` virtual entry at the end of the book list to open the catalog.
+- [x] Kavita authentication via OPDS API key stored in config.
+- [x] Download EPUBs from Kavita to local `Books/<Title>.epub`.
+- [x] Create `.meta.json` sidecar on download for Kavita-sourced books.
+- [x] Paginate the Kavita series/volume catalog.
 - [ ] Push progress to Kavita immediately on closing a Kavita-sourced book.
 - [ ] Pull progress from Kavita on opening a Kavita-sourced book; use whichever is newer by timestamp.
 - [ ] Context menu for downloaded Kavita books: Open / Sync progress / Delete book.
@@ -161,7 +178,6 @@ A status bar at the bottom of the screen shows the current chapter's page percen
 - [ ] Battery indicator UI element in the top-right status bar (functional on ESP32, placeholder on PC).
 - [ ] On device: Wi-Fi connects on demand for Kavita operations; disconnect when done.
 - [ ] Per-network VPN flag in `network.toml` so home LAN connects directly while remote networks use OpenVPN.
-- [ ] PC-first Kavita testing: use `libcurl` and local `Books/` folder against the real Kavita instance before any ESP32 porting.
 
 ## Outstanding technical debt
 

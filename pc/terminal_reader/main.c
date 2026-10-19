@@ -1,7 +1,8 @@
 /*
- * Inky terminal EPUB reader - prototype step 5.
+ * Inky terminal EPUB reader - prototype step 6.
  *
- * Launched without arguments, shows a selectable list of EPUBs in Books/.
+ * Launched without arguments, shows a selectable list of EPUBs in Books/ plus
+ * a [Kavita] entry for downloading books from a self-hosted Kavita server.
  * Launched with a book path, opens it directly.
  *
  * Book list:
@@ -25,6 +26,7 @@
 #include "book_list/book_list.h"
 #include "books_dir/books_dir.h"
 #include "battery/battery.h"
+#include "kavita/kavita.h"
 #include "reader/reader.h"
 #include "terminal/terminal.h"
 
@@ -193,14 +195,450 @@ static void run_reader(reader_session_t *session, const char *path)
 }
 
 /*
+ * Return the path to the Kavita config file.
+ * Caller must free the returned string.
+ */
+static char *kavita_config_path(void)
+{
+    const char *xdg = getenv("XDG_CONFIG_HOME");
+    if (xdg && xdg[0]) {
+        size_t len = strlen(xdg) + strlen("/inky/kavita.toml") + 1;
+        char *path = malloc(len);
+        if (path) {
+            snprintf(path, len, "%s/inky/kavita.toml", xdg);
+        }
+        return path;
+    }
+
+    const char *home = getenv("HOME");
+    if (!home) {
+        return NULL;
+    }
+
+    size_t len = strlen(home) + strlen("/.config/inky/kavita.toml") + 1;
+    char *path = malloc(len);
+    if (path) {
+        snprintf(path, len, "%s/.config/inky/kavita.toml", home);
+    }
+    return path;
+}
+
+/*
+ * Replace characters that are unsafe in a filename with underscores.
+ */
+static void sanitize_filename(char *name)
+{
+    if (!name) {
+        return;
+    }
+
+    for (size_t i = 0; name[i]; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
+            c == '"' || c == '<' || c == '>' || c == '|') {
+            name[i] = '_';
+        }
+    }
+}
+
+/*
+ * Render a generic selectable list with pagination. `items` may be NULL while
+ * loading.
+ */
+static void render_select_list(const char *title, const char *const *items,
+                               int count, int selected, int rows,
+                               const char *status)
+{
+    int per_page = rows - 8;
+    if (per_page < 5) {
+        per_page = 5;
+    }
+
+    int page = count > 0 ? selected / per_page : 0;
+    int page_start = page * per_page;
+    int page_end = page_start + per_page;
+    if (page_end > count) {
+        page_end = count;
+    }
+    int total_pages = count > 0 ? (count + per_page - 1) / per_page : 1;
+
+    terminal_clear();
+    printf("Inky - %s\n", title);
+    printf("---------------------\n\n");
+
+    if (status) {
+        printf("%s\n\n", status);
+    } else if (items) {
+        for (int i = page_start; i < page_end; i++) {
+            if (i == selected) {
+                printf("\033[7m > %s\033[0m\n", items[i]);
+            } else {
+                printf("   %s\n", items[i]);
+            }
+        }
+
+        if (count == 0) {
+            printf("No entries.\n");
+        }
+    }
+
+    printf("\n");
+    if (count > 0) {
+        printf("Page %d / %d  |  Up/Down: select  Left/Right: page  Enter: open  q: back\n",
+               page + 1, total_pages);
+    } else {
+        printf("Up/Down: select  Left/Right: page  Enter: open  q: back\n");
+    }
+
+    int used = 5 + (status ? 2 : (page_end - page_start)) + 2;
+    for (int i = used; i < rows; i++) {
+        printf("\n");
+    }
+
+    fflush(stdout);
+}
+
+/*
+ * Run a generic selectable list and return the selected index, or -1 if the
+ * user presses q / backspace.
+ */
+static int run_select_list(const char *title, const char *const *items,
+                           int count, int rows)
+{
+    int selected = 0;
+    int running = 1;
+    int result = -1;
+
+    while (running) {
+        render_select_list(title, items, count, selected, rows, NULL);
+
+        int key = terminal_read_key();
+        switch (key) {
+        case KEY_QUIT:
+            running = 0;
+            break;
+        case KEY_UP:
+            if (selected > 0) {
+                selected--;
+            }
+            break;
+        case KEY_DOWN:
+            if (selected < count - 1) {
+                selected++;
+            }
+            break;
+        case KEY_LEFT:
+            if (selected > 0) {
+                int per_page = rows - 8;
+                if (per_page < 5) {
+                    per_page = 5;
+                }
+                selected -= per_page;
+                if (selected < 0) {
+                    selected = 0;
+                }
+            }
+            break;
+        case KEY_RIGHT:
+            if (selected < count - 1) {
+                int per_page = rows - 8;
+                if (per_page < 5) {
+                    per_page = 5;
+                }
+                selected += per_page;
+                if (selected >= count) {
+                    selected = count - 1;
+                }
+            }
+            break;
+        case KEY_ENTER:
+            if (count > 0) {
+                result = selected;
+                running = 0;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    return result;
+}
+
+/*
+ * Download progress callback for the terminal.
+ */
+static void download_progress(size_t current, size_t total, void *user_data)
+{
+    (void)user_data;
+
+    if (total > 0) {
+        int pct = (int)((current * 100) / total);
+        printf("\rDownloading... %d%% (%zu / %zu bytes)", pct, current, total);
+    } else {
+        printf("\rDownloading... %zu bytes", current);
+    }
+    fflush(stdout);
+}
+
+/*
+ * Run the Kavita catalog browser and download a selected volume.
+ *
+ * Returns a heap-allocated path to the downloaded EPUB, or NULL if the user
+ * cancels or an error occurs.
+ */
+static char *run_kavita_catalog(int rows)
+{
+    char *config_path = kavita_config_path();
+    if (!config_path) {
+        terminal_clear();
+        printf("Could not determine config path.\n");
+        terminal_read_key();
+        return NULL;
+    }
+
+    kavita_config_t cfg = {0};
+    if (!kavita_config_load(config_path, &cfg)) {
+        terminal_clear();
+        printf("Could not load Kavita config from %s\n", config_path);
+        printf("Create it with:\n");
+        printf("  [kavita]\n");
+        printf("  url = \"http://kavita.home.lan:5000\"\n");
+        printf("  api_key = \"...\"\n");
+        terminal_read_key();
+        free(config_path);
+        return NULL;
+    }
+    free(config_path);
+
+    kavita_client_t *client = kavita_client_new(&cfg);
+    kavita_config_free(&cfg);
+    if (!client) {
+        terminal_clear();
+        printf("Could not create Kavita client.\n");
+        terminal_read_key();
+        return NULL;
+    }
+
+    terminal_clear();
+    printf("Connecting to Kavita...\n");
+    fflush(stdout);
+
+    if (!kavita_client_ping(client)) {
+        terminal_clear();
+        printf("Could not reach Kavita. Check URL and API key.\n");
+        terminal_read_key();
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    /* --- Libraries --- */
+    kavita_library_t *libraries = NULL;
+    int library_count = kavita_client_fetch_libraries(client, &libraries);
+    const char **names = NULL;
+    if (library_count < 0) {
+        terminal_clear();
+        printf("Failed to fetch libraries.\n");
+        terminal_read_key();
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    int library_id;
+    if (library_count == 1) {
+        library_id = libraries[0].library_id;
+        kavita_libraries_free(libraries, library_count);
+    } else {
+        names = calloc((size_t)library_count + 1, sizeof(char *));
+        if (!names) {
+            kavita_libraries_free(libraries, library_count);
+            kavita_client_free(client);
+            return NULL;
+        }
+        for (int i = 0; i < library_count; i++) {
+            names[i] = libraries[i].name;
+        }
+
+        int library_idx = run_select_list("Kavita - Libraries", names, library_count, rows);
+        free(names);
+
+        if (library_idx < 0) {
+            kavita_libraries_free(libraries, library_count);
+            kavita_client_free(client);
+            return NULL;
+        }
+
+        library_id = libraries[library_idx].library_id;
+        kavita_libraries_free(libraries, library_count);
+    }
+
+    if (library_id <= 0) {
+        terminal_clear();
+        printf("Selected library has no valid ID.\n");
+        terminal_read_key();
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    /* --- Series --- */
+    kavita_series_t *series = NULL;
+    int series_count = kavita_client_fetch_series(client, library_id, &series);
+    if (series_count < 0) {
+        terminal_clear();
+        printf("Failed to fetch series.\n");
+        terminal_read_key();
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    names = calloc((size_t)series_count + 1, sizeof(char *));
+    if (!names) {
+        kavita_series_free(series, series_count);
+        kavita_client_free(client);
+        return NULL;
+    }
+    for (int i = 0; i < series_count; i++) {
+        names[i] = series[i].name;
+    }
+
+    int series_idx = run_select_list("Kavita - Series", names, series_count, rows);
+    free(names);
+
+    if (series_idx < 0) {
+        kavita_series_free(series, series_count);
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    int series_id = series[series_idx].series_id;
+    char *series_name = strdup(series[series_idx].name);
+    kavita_series_free(series, series_count);
+
+    if (series_id <= 0) {
+        terminal_clear();
+        printf("Selected series has no valid ID.\n");
+        terminal_read_key();
+        free(series_name);
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    /* --- Volumes --- */
+    kavita_volume_t *volumes = NULL;
+    int volume_count = kavita_client_fetch_volumes(client, series_id, &volumes);
+    if (volume_count < 0) {
+        terminal_clear();
+        printf("Failed to fetch volumes.\n");
+        terminal_read_key();
+        free(series_name);
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    names = calloc((size_t)volume_count + 1, sizeof(char *));
+    if (!names) {
+        kavita_volumes_free(volumes, volume_count);
+        free(series_name);
+        kavita_client_free(client);
+        return NULL;
+    }
+    for (int i = 0; i < volume_count; i++) {
+        names[i] = volumes[i].title;
+    }
+
+    int volume_idx = run_select_list("Kavita - Volumes", names, volume_count, rows);
+    free(names);
+
+    if (volume_idx < 0) {
+        kavita_volumes_free(volumes, volume_count);
+        free(series_name);
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    /* --- Download --- */
+    const char *books_dir = find_books_dir();
+    if (!books_dir) {
+        terminal_clear();
+        printf("Could not find Books/ directory.\n");
+        terminal_read_key();
+        kavita_volumes_free(volumes, volume_count);
+        free(series_name);
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    char *filename = strdup(volumes[volume_idx].title);
+    sanitize_filename(filename);
+
+    size_t path_len = strlen(books_dir) + 1 + strlen(filename) + strlen(".epub") + 1;
+    char *out_path = malloc(path_len);
+    if (!out_path) {
+        free(filename);
+        kavita_volumes_free(volumes, volume_count);
+        free(series_name);
+        kavita_client_free(client);
+        return NULL;
+    }
+    snprintf(out_path, path_len, "%s/%s.epub", books_dir, filename);
+
+    terminal_clear();
+    printf("Downloading %s...\n", volumes[volume_idx].title);
+    fflush(stdout);
+
+    int ok = kavita_client_download_volume(client, &volumes[volume_idx],
+                                           out_path, download_progress, NULL);
+
+    printf("\n");
+
+    if (!ok) {
+        terminal_clear();
+        printf("Download failed.\n");
+        terminal_read_key();
+        free(out_path);
+        free(filename);
+        kavita_volumes_free(volumes, volume_count);
+        free(series_name);
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    /* Write the metadata sidecar. */
+    kavita_meta_t meta = {
+        .kavita_volume_id = volumes[volume_idx].volume_id,
+        .kavita_series_id = series_id,
+        .title = volumes[volume_idx].title,
+    };
+    kavita_meta_save(out_path, &meta);
+
+    kavita_volumes_free(volumes, volume_count);
+    free(series_name);
+    free(filename);
+    kavita_client_free(client);
+
+    terminal_clear();
+    printf("Downloaded to %s\n", out_path);
+    printf("Press any key to open it, or q to return to the list.\n");
+    int key = terminal_read_key();
+    if (key == KEY_QUIT) {
+        free(out_path);
+        return NULL;
+    }
+
+    return out_path;
+}
+
+/*
  * Render the book list to the terminal.
  */
 static void render_book_list(const book_entry_t *entries, int count,
-                             int selected, int rows)
+                             int selected, int rows, int show_kavita)
 {
     terminal_clear();
     printf("Inky - Select a book\n");
     printf("---------------------\n\n");
+
+    int total_items = count + (show_kavita ? 1 : 0);
 
     for (int i = 0; i < count; i++) {
         char line[512];
@@ -218,7 +656,15 @@ static void render_book_list(const book_entry_t *entries, int count,
         }
     }
 
-    if (count == 0) {
+    if (show_kavita) {
+        if (selected == count) {
+            printf("\033[7m > [Kavita]\033[0m\n");
+        } else {
+            printf("   [Kavita]\n");
+        }
+    }
+
+    if (total_items == 0) {
         const char *books_dir = find_books_dir();
         printf("No .epub files found in %s/\n", books_dir ? books_dir : "Books");
     }
@@ -227,7 +673,7 @@ static void render_book_list(const book_entry_t *entries, int count,
     printf("Up/Down: select  Enter: open  q: quit\n");
 
     /* Pad to keep the screen stable. */
-    int used = 5 + count + 2;
+    int used = 5 + total_items + 2;
     for (int i = used; i < rows; i++) {
         printf("\n");
     }
@@ -259,12 +705,14 @@ static char *run_book_list(int rows, int cols)
         return NULL;
     }
 
+    int show_kavita = 1;
+    int total_items = count + (show_kavita ? 1 : 0);
     int selected = 0;
     int running = 1;
     char *result = NULL;
 
     while (running) {
-        render_book_list(entries, count, selected, rows);
+        render_book_list(entries, count, selected, rows, show_kavita);
 
         int key = terminal_read_key();
         switch (key) {
@@ -277,12 +725,17 @@ static char *run_book_list(int rows, int cols)
             }
             break;
         case KEY_DOWN:
-            if (selected < count - 1) {
+            if (selected < total_items - 1) {
                 selected++;
             }
             break;
         case KEY_ENTER:
-            if (count > 0) {
+            if (selected == count && show_kavita) {
+                result = run_kavita_catalog(rows);
+                if (result) {
+                    running = 0;
+                }
+            } else if (count > 0) {
                 result = strdup(entries[selected].path);
                 running = 0;
             }

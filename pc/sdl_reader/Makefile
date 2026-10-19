@@ -2,7 +2,7 @@
 
 CC      = gcc
 CFLAGS  = -Wall -Wextra -O2 -MMD `sdl2-config --cflags` -I../../shared
-LDLIBS  = `sdl2-config --libs` -lSDL2_ttf -lzip -lcjson
+LDLIBS  = `sdl2-config --libs` -lSDL2_ttf -lzip -lcjson -lcurl
 
 TARGET  = inky_sdl
 SRCS    = main.c \
@@ -12,6 +12,7 @@ SRCS    = main.c \
           ../../shared/book_list/book_list.c \
           ../../shared/epub/epub.c \
           ../../shared/html/html.c \
+          ../../shared/kavita/kavita.c \
           ../../shared/layout/layout.c \
           ../../shared/progress/progress.c \
           ../../shared/reader/reader.c

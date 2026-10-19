@@ -1,7 +1,8 @@
 /*
- * Inky SDL2 reader - step 5.
+ * Inky SDL2 reader - step 6.
  *
- * Launched without arguments, shows a selectable list of EPUBs in Books/.
+ * Launched without arguments, shows a selectable list of EPUBs in Books/ plus
+ * a [Kavita] entry for downloading books from a self-hosted Kavita server.
  * Launched with a book path, opens it directly.
  *
  * Book list:
@@ -26,6 +27,7 @@
 
 #include "../../shared/books_dir/books_dir.h"
 #include "../../shared/book_list/book_list.h"
+#include "../../shared/kavita/kavita.h"
 #include "../../shared/reader/reader.h"
 #include "../../shared/battery/battery.h"
 
@@ -56,6 +58,8 @@ typedef struct {
     book_entry_t *books;
     int book_count;
     int selected_book;
+    int show_kavita;
+    int pending_kavita;
 
     /* Reader session. */
     reader_session_t reader;
@@ -198,6 +202,24 @@ static void reader_open_selected(app_t *app)
 }
 
 /*
+ * Open a book by path.
+ */
+static void reader_open_path(app_t *app, const char *path)
+{
+    if (!path) {
+        return;
+    }
+
+    app->reader.cols = (SCREEN_WIDTH - 2 * MARGIN_X) / app->cell_w;
+    app->reader.rows = (SCREEN_HEIGHT - 2 * MARGIN_Y) / app->cell_h;
+    app->reader.status_rows = (STATUS_HEIGHT + app->cell_h - 1) / app->cell_h;
+
+    if (reader_open(&app->reader, path)) {
+        app->state = STATE_READER;
+    }
+}
+
+/*
  * Close the current book and return to the book list.
  */
 static void reader_close_book(app_t *app)
@@ -240,11 +262,12 @@ static void render_list(app_t *app)
     SDL_RenderClear(app->renderer);
 
     int y = MARGIN_Y;
+    int total_items = app->book_count + (app->show_kavita ? 1 : 0);
 
     draw_text_line(app, "Inky - Select a book", MARGIN_X, y);
     y += app->cell_h * 2;
 
-    if (app->book_count == 0) {
+    if (total_items == 0) {
         const char *books_dir = find_books_dir();
         char msg[256];
         snprintf(msg, sizeof(msg), "No .epub files found in %s/", books_dir ? books_dir : "Books");
@@ -264,6 +287,13 @@ static void render_list(app_t *app)
             }
             draw_text_line(app, line, MARGIN_X, y);
             y += app->cell_h;
+        }
+
+        if (app->show_kavita) {
+            char line[64];
+            snprintf(line, sizeof(line), "%s [Kavita]",
+                     app->selected_book == app->book_count ? ">" : " ");
+            draw_text_line(app, line, MARGIN_X, y);
         }
     }
 
@@ -335,6 +365,8 @@ static void app_render(app_t *app)
  */
 static void app_handle_key(app_t *app, SDL_Keycode key)
 {
+    int total_items = app->book_count + (app->show_kavita ? 1 : 0);
+
     if (app->state == STATE_LIST) {
         switch (key) {
         case SDLK_q:
@@ -347,13 +379,17 @@ static void app_handle_key(app_t *app, SDL_Keycode key)
             }
             break;
         case SDLK_DOWN:
-            if (app->selected_book < app->book_count - 1) {
+            if (app->selected_book < total_items - 1) {
                 app->selected_book++;
             }
             break;
         case SDLK_RETURN:
         case SDLK_KP_ENTER:
-            reader_open_selected(app);
+            if (app->show_kavita && app->selected_book == app->book_count) {
+                app->pending_kavita = 1;
+            } else {
+                reader_open_selected(app);
+            }
             break;
         default:
             break;
@@ -407,11 +443,16 @@ static void app_handle_click(app_t *app, int x, int y)
                 app->selected_book--;
             }
         } else if (x >= 2 * third) {
-            if (app->selected_book < app->book_count - 1) {
+            int total_items = app->book_count + (app->show_kavita ? 1 : 0);
+            if (app->selected_book < total_items - 1) {
                 app->selected_book++;
             }
         } else {
-            reader_open_selected(app);
+            if (app->show_kavita && app->selected_book == app->book_count) {
+                app->pending_kavita = 1;
+            } else {
+                reader_open_selected(app);
+            }
         }
     } else if (app->state == STATE_READER) {
         if (y < 60) {
@@ -426,6 +467,498 @@ static void app_handle_click(app_t *app, int x, int y)
             reader_navigate(&app->reader, 1);
         }
     }
+}
+
+/*
+ * Return the path to the Kavita config file.
+ * Caller must free the returned string.
+ */
+static char *kavita_config_path(void)
+{
+    const char *xdg = getenv("XDG_CONFIG_HOME");
+    if (xdg && xdg[0]) {
+        size_t len = strlen(xdg) + strlen("/inky/kavita.toml") + 1;
+        char *path = malloc(len);
+        if (path) {
+            snprintf(path, len, "%s/inky/kavita.toml", xdg);
+        }
+        return path;
+    }
+
+    const char *home = getenv("HOME");
+    if (!home) {
+        return NULL;
+    }
+
+    size_t len = strlen(home) + strlen("/.config/inky/kavita.toml") + 1;
+    char *path = malloc(len);
+    if (path) {
+        snprintf(path, len, "%s/.config/inky/kavita.toml", home);
+    }
+    return path;
+}
+
+/*
+ * Replace characters that are unsafe in a filename with underscores.
+ */
+static void sanitize_filename(char *name)
+{
+    if (!name) {
+        return;
+    }
+
+    for (size_t i = 0; name[i]; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' ||
+            c == '"' || c == '<' || c == '>' || c == '|') {
+            name[i] = '_';
+        }
+    }
+}
+
+/*
+ * Render a generic Kavita selection list with pagination.
+ */
+static void render_kavita_list(app_t *app, const char *title,
+                               const char *const *items, int count,
+                               int selected, const char *status)
+{
+    SDL_SetRenderDrawColor(app->renderer, app->bg.r, app->bg.g, app->bg.b, app->bg.a);
+    SDL_RenderClear(app->renderer);
+
+    int y = MARGIN_Y;
+
+    draw_text_line(app, title, MARGIN_X, y);
+    y += app->cell_h * 2;
+
+    int per_page = (SCREEN_HEIGHT - y - app->cell_h * 2 - 4) / app->cell_h;
+    if (per_page < 5) {
+        per_page = 5;
+    }
+
+    int page = count > 0 ? selected / per_page : 0;
+    int page_start = page * per_page;
+    int page_end = page_start + per_page;
+    if (page_end > count) {
+        page_end = count;
+    }
+    int total_pages = count > 0 ? (count + per_page - 1) / per_page : 1;
+
+    if (status) {
+        draw_text_line(app, status, MARGIN_X, y);
+        y += app->cell_h * 2;
+    } else if (items) {
+        for (int i = page_start; i < page_end; i++) {
+            char line[512];
+            snprintf(line, sizeof(line), "%s %s",
+                     i == selected ? ">" : " ", items[i]);
+            draw_text_line(app, line, MARGIN_X, y);
+            y += app->cell_h;
+        }
+
+        if (count == 0) {
+            draw_text_line(app, "No entries.", MARGIN_X, y);
+        }
+    }
+
+    char footer[256];
+    if (count > 0) {
+        snprintf(footer, sizeof(footer),
+                 "Page %d / %d  |  Up/Down: select  Left/Right: page  Enter: open  Esc/q: back",
+                 page + 1, total_pages);
+    } else {
+        snprintf(footer, sizeof(footer),
+                 "Up/Down: select  Left/Right: page  Enter: open  Esc/q: back");
+    }
+    y = SCREEN_HEIGHT - app->cell_h - 4;
+    draw_text_line(app, footer, MARGIN_X, y);
+
+    SDL_RenderPresent(app->renderer);
+}
+
+enum {
+    KAVITA_KEY_QUIT,
+    KAVITA_KEY_UP,
+    KAVITA_KEY_DOWN,
+    KAVITA_KEY_PAGE_UP,
+    KAVITA_KEY_PAGE_DOWN,
+    KAVITA_KEY_ENTER,
+};
+
+/*
+ * Poll SDL events until the user presses Up, Down, Enter, Escape or q.
+ * Returns the key code that ended the wait.
+ */
+static int kavita_wait_key(void)
+{
+    SDL_Event event;
+
+    while (1) {
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_QUIT) {
+                return KAVITA_KEY_QUIT;
+            }
+            if (event.type == SDL_KEYDOWN) {
+                switch (event.key.keysym.sym) {
+                case SDLK_q:
+                case SDLK_ESCAPE:
+                    return KAVITA_KEY_QUIT;
+                case SDLK_UP:
+                    return KAVITA_KEY_UP;
+                case SDLK_DOWN:
+                    return KAVITA_KEY_DOWN;
+                case SDLK_LEFT:
+                case SDLK_PAGEUP:
+                    return KAVITA_KEY_PAGE_UP;
+                case SDLK_RIGHT:
+                case SDLK_PAGEDOWN:
+                    return KAVITA_KEY_PAGE_DOWN;
+                case SDLK_RETURN:
+                case SDLK_KP_ENTER:
+                    return KAVITA_KEY_ENTER;
+                default:
+                    break;
+                }
+            }
+            if (event.type == SDL_MOUSEBUTTONDOWN) {
+                int x = event.button.x;
+                int y = event.button.y;
+                if (y < 60) {
+                    return KAVITA_KEY_QUIT;
+                }
+                if (y >= SCREEN_HEIGHT - 60) {
+                    /* Bottom strip: left/right third for paging, center enter. */
+                    int third = SCREEN_WIDTH / 3;
+                    if (x < third) {
+                        return KAVITA_KEY_PAGE_UP;
+                    } else if (x >= 2 * third) {
+                        return KAVITA_KEY_PAGE_DOWN;
+                    } else {
+                        return KAVITA_KEY_ENTER;
+                    }
+                }
+                int third = SCREEN_WIDTH / 3;
+                if (x < third) {
+                    return KAVITA_KEY_UP;
+                } else if (x >= 2 * third) {
+                    return KAVITA_KEY_DOWN;
+                } else {
+                    return KAVITA_KEY_ENTER;
+                }
+            }
+        }
+
+        SDL_Delay(16);
+    }
+}
+
+/*
+ * Run a generic selectable list for the Kavita catalog.
+ *
+ * Returns the selected index, or -1 if the user cancels.
+ */
+static int run_kavita_select(app_t *app, const char *title,
+                             const char *const *items, int count)
+{
+    int selected = 0;
+
+    while (1) {
+        render_kavita_list(app, title, items, count, selected, NULL);
+
+        int key = kavita_wait_key();
+        switch (key) {
+        case KAVITA_KEY_QUIT:
+            return -1;
+        case KAVITA_KEY_UP:
+            if (selected > 0) {
+                selected--;
+            }
+            break;
+        case KAVITA_KEY_DOWN:
+            if (selected < count - 1) {
+                selected++;
+            }
+            break;
+        case KAVITA_KEY_PAGE_UP:
+            if (selected > 0) {
+                int per_page = (SCREEN_HEIGHT - MARGIN_Y - app->cell_h * 4 - 4) / app->cell_h;
+                if (per_page < 5) {
+                    per_page = 5;
+                }
+                selected -= per_page;
+                if (selected < 0) {
+                    selected = 0;
+                }
+            }
+            break;
+        case KAVITA_KEY_PAGE_DOWN:
+            if (selected < count - 1) {
+                int per_page = (SCREEN_HEIGHT - MARGIN_Y - app->cell_h * 4 - 4) / app->cell_h;
+                if (per_page < 5) {
+                    per_page = 5;
+                }
+                selected += per_page;
+                if (selected >= count) {
+                    selected = count - 1;
+                }
+            }
+            break;
+        case KAVITA_KEY_ENTER:
+            if (count > 0) {
+                return selected;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+}
+
+/*
+ * Download progress callback for SDL.
+ */
+static void sdl_download_progress(size_t current, size_t total, void *user_data)
+{
+    app_t *app = (app_t *)user_data;
+
+    char status[256];
+    if (total > 0) {
+        int pct = (int)((current * 100) / total);
+        snprintf(status, sizeof(status), "Downloading... %d%% (%zu / %zu bytes)",
+                 pct, current, total);
+    } else {
+        snprintf(status, sizeof(status), "Downloading... %zu bytes", current);
+    }
+
+    SDL_SetRenderDrawColor(app->renderer, app->bg.r, app->bg.g, app->bg.b, app->bg.a);
+    SDL_RenderClear(app->renderer);
+    draw_text_line(app, status, MARGIN_X, MARGIN_Y);
+    SDL_RenderPresent(app->renderer);
+}
+
+/*
+ * Run the Kavita catalog browser and download a selected volume.
+ *
+ * Returns a heap-allocated path to the downloaded EPUB, or NULL if the user
+ * cancels or an error occurs.
+ */
+static char *run_kavita_catalog(app_t *app)
+{
+    char *config_path = kavita_config_path();
+    if (!config_path) {
+        render_kavita_list(app, "Kavita", NULL, 0, 0,
+                           "Could not determine config path.");
+        kavita_wait_key();
+        return NULL;
+    }
+
+    kavita_config_t cfg = {0};
+    if (!kavita_config_load(config_path, &cfg)) {
+        render_kavita_list(app, "Kavita", NULL, 0, 0,
+                           "Could not load ~/.config/inky/kavita.toml");
+        kavita_wait_key();
+        free(config_path);
+        return NULL;
+    }
+    free(config_path);
+
+    kavita_client_t *client = kavita_client_new(&cfg);
+    kavita_config_free(&cfg);
+    if (!client) {
+        render_kavita_list(app, "Kavita", NULL, 0, 0,
+                           "Could not create Kavita client.");
+        kavita_wait_key();
+        return NULL;
+    }
+
+    render_kavita_list(app, "Kavita", NULL, 0, 0, "Connecting to Kavita...");
+
+    if (!kavita_client_ping(client)) {
+        render_kavita_list(app, "Kavita", NULL, 0, 0,
+                           "Could not reach Kavita. Check URL and API key.");
+        kavita_wait_key();
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    /* --- Libraries --- */
+    kavita_library_t *libraries = NULL;
+    int library_count = kavita_client_fetch_libraries(client, &libraries);
+    const char **names = NULL;
+    if (library_count < 0) {
+        render_kavita_list(app, "Kavita", NULL, 0, 0,
+                           "Failed to fetch libraries.");
+        kavita_wait_key();
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    int library_id;
+    if (library_count == 1) {
+        library_id = libraries[0].library_id;
+        kavita_libraries_free(libraries, library_count);
+    } else {
+        names = calloc((size_t)library_count + 1, sizeof(char *));
+        if (!names) {
+            kavita_libraries_free(libraries, library_count);
+            kavita_client_free(client);
+            return NULL;
+        }
+        for (int i = 0; i < library_count; i++) {
+            names[i] = libraries[i].name;
+        }
+
+        int library_idx = run_kavita_select(app, "Kavita - Libraries", names, library_count);
+        free(names);
+
+        if (library_idx < 0) {
+            kavita_libraries_free(libraries, library_count);
+            kavita_client_free(client);
+            return NULL;
+        }
+
+        library_id = libraries[library_idx].library_id;
+        kavita_libraries_free(libraries, library_count);
+    }
+
+    if (library_id <= 0) {
+        render_kavita_list(app, "Kavita", NULL, 0, 0,
+                           "Selected library has no valid ID.");
+        kavita_wait_key();
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    /* --- Series --- */
+    kavita_series_t *series = NULL;
+    int series_count = kavita_client_fetch_series(client, library_id, &series);
+    if (series_count < 0) {
+        render_kavita_list(app, "Kavita", NULL, 0, 0,
+                           "Failed to fetch series.");
+        kavita_wait_key();
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    names = calloc((size_t)series_count + 1, sizeof(char *));
+    if (!names) {
+        kavita_series_free(series, series_count);
+        kavita_client_free(client);
+        return NULL;
+    }
+    for (int i = 0; i < series_count; i++) {
+        names[i] = series[i].name;
+    }
+
+    int series_idx = run_kavita_select(app, "Kavita - Series", names, series_count);
+    free(names);
+
+    if (series_idx < 0) {
+        kavita_series_free(series, series_count);
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    int series_id = series[series_idx].series_id;
+    kavita_series_free(series, series_count);
+
+    if (series_id <= 0) {
+        render_kavita_list(app, "Kavita", NULL, 0, 0,
+                           "Selected series has no valid ID.");
+        kavita_wait_key();
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    /* --- Volumes --- */
+    kavita_volume_t *volumes = NULL;
+    int volume_count = kavita_client_fetch_volumes(client, series_id, &volumes);
+    if (volume_count < 0) {
+        render_kavita_list(app, "Kavita", NULL, 0, 0,
+                           "Failed to fetch volumes.");
+        kavita_wait_key();
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    names = calloc((size_t)volume_count + 1, sizeof(char *));
+    if (!names) {
+        kavita_volumes_free(volumes, volume_count);
+        kavita_client_free(client);
+        return NULL;
+    }
+    for (int i = 0; i < volume_count; i++) {
+        names[i] = volumes[i].title;
+    }
+
+    int volume_idx = run_kavita_select(app, "Kavita - Volumes", names, volume_count);
+    free(names);
+
+    if (volume_idx < 0) {
+        kavita_volumes_free(volumes, volume_count);
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    /* --- Download --- */
+    const char *books_dir = find_books_dir();
+    if (!books_dir) {
+        render_kavita_list(app, "Kavita", NULL, 0, 0,
+                           "Could not find Books/ directory.");
+        kavita_wait_key();
+        kavita_volumes_free(volumes, volume_count);
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    char *filename = strdup(volumes[volume_idx].title);
+    sanitize_filename(filename);
+
+    size_t path_len = strlen(books_dir) + 1 + strlen(filename) + strlen(".epub") + 1;
+    char *out_path = malloc(path_len);
+    if (!out_path) {
+        free(filename);
+        kavita_volumes_free(volumes, volume_count);
+        kavita_client_free(client);
+        return NULL;
+    }
+    snprintf(out_path, path_len, "%s/%s.epub", books_dir, filename);
+
+    int ok = kavita_client_download_volume(client, &volumes[volume_idx],
+                                           out_path, sdl_download_progress, app);
+
+    if (!ok) {
+        render_kavita_list(app, "Kavita", NULL, 0, 0, "Download failed.");
+        kavita_wait_key();
+        free(out_path);
+        free(filename);
+        kavita_volumes_free(volumes, volume_count);
+        kavita_client_free(client);
+        return NULL;
+    }
+
+    /* Write the metadata sidecar. */
+    kavita_meta_t meta = {
+        .kavita_volume_id = volumes[volume_idx].volume_id,
+        .kavita_series_id = series_id,
+        .title = volumes[volume_idx].title,
+    };
+    kavita_meta_save(out_path, &meta);
+
+    kavita_volumes_free(volumes, volume_count);
+    free(filename);
+    kavita_client_free(client);
+
+    render_kavita_list(app, "Kavita", NULL, 0, 0,
+                       "Download complete. Press Enter to open, Esc/q to return.");
+
+    int key = kavita_wait_key();
+    if (key == KAVITA_KEY_QUIT) {
+        free(out_path);
+        return NULL;
+    }
+
+    return out_path;
 }
 
 int main(int argc, char **argv)
@@ -443,6 +976,7 @@ int main(int argc, char **argv)
 
     app_t app = {0};
     reader_init(&app.reader);
+    app.show_kavita = 1;
 
     app.window = SDL_CreateWindow(
         "Inky SDL Reader",
@@ -506,6 +1040,7 @@ int main(int argc, char **argv)
     }
 
     SDL_Event event;
+
     while (app.state != STATE_QUIT) {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_QUIT) {
@@ -523,6 +1058,19 @@ int main(int argc, char **argv)
                 int x = (int)(event.tfinger.x * SCREEN_WIDTH);
                 int y = (int)(event.tfinger.y * SCREEN_HEIGHT);
                 app_handle_click(&app, x, y);
+            }
+        }
+
+        /*
+         * If the user selected the Kavita entry, run the catalog browser as a
+         * modal and open any downloaded book on return.
+         */
+        if (app.pending_kavita) {
+            app.pending_kavita = 0;
+            char *kavita_path = run_kavita_catalog(&app);
+            if (kavita_path) {
+                reader_open_path(&app, kavita_path);
+                free(kavita_path);
             }
         }
 

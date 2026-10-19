@@ -6,7 +6,8 @@
  * This module handles:
  *   - Loading the Kavita configuration (URL + OPDS API key)
  *   - Loading/saving the per-book metadata sidecar (.meta.json)
- *   - A client skeleton for OPDS catalog browsing and progress sync
+ *   - OPDS catalog browsing (libraries, series, volumes)
+ *   - Downloading volumes from Kavita to local storage
  *
  * The PC implementation uses libcurl for HTTP and cJSON for JSON. The ESP32
  * port will replace those with the ESP HTTP client and a lighter JSON library.
@@ -114,5 +115,91 @@ const kavita_config_t *kavita_client_config(const kavita_client_t *client);
  * Returns 1 if reachable, 0 otherwise.
  */
 int kavita_client_ping(kavita_client_t *client);
+
+/*
+ * One library returned by the OPDS catalog.
+ */
+typedef struct {
+    int library_id;
+    char *name;
+} kavita_library_t;
+
+/*
+ * One series returned by the OPDS catalog.
+ */
+typedef struct {
+    int series_id;
+    char *name;
+} kavita_series_t;
+
+/*
+ * One volume returned by the OPDS catalog.
+ *
+ * The acquisition link points to the downloadable file. kavita_volume_id and
+ * kavita_chapter_id are parsed from that link.
+ */
+typedef struct {
+    int volume_id;
+    int chapter_id;
+    char *title;
+    char *download_url;  /* Relative URL, ready to be prefixed with cfg->url. */
+} kavita_volume_t;
+
+/*
+ * Progress callback for downloads.
+ *
+ * `current` is the number of bytes received so far.
+ * `total` is the expected total size, or 0 if the server did not send one.
+ * `user_data` is the pointer passed to the download call.
+ */
+typedef void (*kavita_download_progress_t)(size_t current, size_t total, void *user_data);
+
+/*
+ * Fetch the list of libraries from Kavita.
+ *
+ * Returns the number of libraries, or -1 on error. The caller must free the
+ * array with kavita_libraries_free().
+ */
+int kavita_client_fetch_libraries(kavita_client_t *client,
+                                  kavita_library_t **libraries);
+
+/*
+ * Fetch the list of series in a library.
+ *
+ * Returns the number of series, or -1 on error. The caller must free the array
+ * with kavita_series_free().
+ */
+int kavita_client_fetch_series(kavita_client_t *client, int library_id,
+                               kavita_series_t **series);
+
+/*
+ * Fetch the list of volumes in a series.
+ *
+ * Returns the number of volumes, or -1 on error. The caller must free the
+ * array with kavita_volumes_free().
+ */
+int kavita_client_fetch_volumes(kavita_client_t *client, int series_id,
+                                kavita_volume_t **volumes);
+
+/*
+ * Download a volume to `out_path`.
+ *
+ * The volume must have been returned by kavita_client_fetch_volumes().
+ * `progress` may be NULL.
+ *
+ * Returns 1 on success, 0 on failure.
+ */
+int kavita_client_download_volume(kavita_client_t *client,
+                                  const kavita_volume_t *volume,
+                                  const char *out_path,
+                                  kavita_download_progress_t progress,
+                                  void *user_data);
+
+/*
+ * Free arrays returned by the catalog fetch functions.
+ */
+void kavita_libraries_free(kavita_library_t *libraries, int count);
+void kavita_series_free(kavita_series_t *series, int count);
+void kavita_volumes_free(kavita_volume_t *volumes, int count);
 
 #endif
