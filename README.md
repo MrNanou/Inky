@@ -161,19 +161,12 @@ Launch the reader without arguments, select `[Kavita]` at the bottom of the book
 - [SDL2](https://www.libsdl.org/)
 - [Kavita API docs](https://www.kavitareader.com/)
 
-## Todo / Next steps
+## Detailed next steps
 
-- [x] Build PC `kavita/` module for OPDS catalog browsing and download.
-- [x] Add `[Kavita]` virtual entry at the end of the book list to open the catalog.
-- [x] Kavita authentication via OPDS API key stored in config.
-- [x] Download EPUBs from Kavita to local `Books/<Title>.epub`.
-- [x] Create `.meta.json` sidecar on download for Kavita-sourced books.
-- [x] Paginate the Kavita series/volume catalog.
-- [ ] Push progress to Kavita immediately on closing a Kavita-sourced book.
-- [ ] Pull progress from Kavita on opening a Kavita-sourced book; use whichever is newer by timestamp.
-- [ ] Context menu for downloaded Kavita books: Open / Sync progress / Delete book.
+These items are not yet covered by the high-level milestones above:
+
+- [ ] Context menu for downloaded Kavita books: Open / Sync progress / Delete.
 - [ ] Delete action removes `<Title>.epub`, `<Title>.epub.meta.json`, and any companion files together.
-- [ ] Progress file format: add `updated_at` timestamp field.
 - [ ] Queue progress updates when offline; drain queue on next successful Kavita connection.
 - [ ] Battery indicator UI element in the top-right status bar (functional on ESP32, placeholder on PC).
 - [ ] On device: Wi-Fi connects on demand for Kavita operations; disconnect when done.
@@ -181,4 +174,4 @@ Launch the reader without arguments, select `[Kavita]` at the bottom of the book
 
 ## Outstanding technical debt
 
-- None currently. The `zip_t` leak has been fixed.
+- None currently.
