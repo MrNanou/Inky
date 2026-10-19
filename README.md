@@ -168,7 +168,6 @@ These items are not yet covered by the high-level milestones above:
 - [ ] Context menu for downloaded Kavita books: Open / Sync progress / Delete.
 - [ ] Delete action removes `<Title>.epub`, `<Title>.epub.meta.json`, and any companion files together.
 - [ ] Queue progress updates when offline; drain queue on next successful Kavita connection.
-- [ ] Battery indicator UI element in the top-right status bar (functional on ESP32, placeholder on PC).
 - [ ] On device: Wi-Fi connects on demand for Kavita operations; disconnect when done.
 - [ ] Per-network VPN flag in `network.toml` so home LAN connects directly while remote networks use OpenVPN.
 
