@@ -1147,6 +1147,19 @@ int main(int argc, char **argv)
             if (kavita_path) {
                 reader_open_path(&app, kavita_path);
                 free(kavita_path);
+            } else {
+                /* A download may have added a new book; rescan the list. */
+                book_list_free(app.books, app.book_count);
+                const char *books_dir = find_books_dir();
+                app.book_count = book_list_scan(books_dir, &app.books);
+                if (app.book_count < 0) {
+                    app.book_count = 0;
+                    app.books = NULL;
+                }
+                int total = app.book_count + (app.show_kavita ? 1 : 0);
+                if (app.selected_book >= total) {
+                    app.selected_book = total > 0 ? total - 1 : 0;
+                }
             }
         }
 

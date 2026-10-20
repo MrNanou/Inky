@@ -789,6 +789,18 @@ static char *run_book_list(int rows, int cols)
                 result = run_kavita_catalog(rows);
                 if (result) {
                     running = 0;
+                } else {
+                    /* A download may have added a new book; rescan the list. */
+                    book_list_free(entries, count);
+                    count = book_list_scan(books_dir, &entries);
+                    if (count < 0) {
+                        count = 0;
+                        entries = NULL;
+                    }
+                    total_items = count + (show_kavita ? 1 : 0);
+                    if (selected > total_items - 1) {
+                        selected = total_items > 0 ? total_items - 1 : 0;
+                    }
                 }
             } else if (count > 0) {
                 result = strdup(entries[selected].path);

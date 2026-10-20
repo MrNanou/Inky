@@ -137,6 +137,7 @@ Progress is synced with Kavita automatically:
 - On **close**: local progress is pushed to Kavita immediately on PC.
 - On **device**: Wi-Fi is connected on demand, progress is pushed, then disconnected; failed pushes are queued for the next session.
 - Context menu (`c` on a downloaded book): manually sync progress or delete the book and its sidecar.
+- After a Kavita download, choosing **q** at the "open it?" prompt returns to a refreshed book list.
 
 ## Module layout
 

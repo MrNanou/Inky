@@ -75,7 +75,7 @@ int terminal_read_key(void)
         }
     }
 
-    return KEY_OTHER;
+    return c;
 }
 
 void terminal_clear(void)
