@@ -148,6 +148,14 @@ static void reader_render(reader_session_t *session)
  */
 static void run_reader(reader_session_t *session, const char *path)
 {
+    /*
+     * If this is a Kavita-sourced book, merge local and remote progress before
+     * opening. Failures fall back to local progress silently.
+     */
+    int sync_chapter = 0;
+    int sync_page = 0;
+    kavita_sync_on_open(path, &sync_chapter, &sync_page, NULL, 0);
+
     if (!reader_open(session, path)) {
         terminal_clear();
         printf("[Could not open %s]\n", path);
@@ -191,37 +199,23 @@ static void run_reader(reader_session_t *session, const char *path)
         }
     }
 
+    int close_chapter = session->current_chapter;
+    int close_page = session->current_page;
+
     reader_close(session);
+
+    /* Push progress to Kavita for downloaded books. */
+    if (!kavita_sync_on_close(path, close_chapter, close_page)) {
+        terminal_clear();
+        printf("[Progress sync failed; saved locally]\n");
+        terminal_read_key();
+    }
 }
 
 /*
  * Return the path to the Kavita config file.
  * Caller must free the returned string.
  */
-static char *kavita_config_path(void)
-{
-    const char *xdg = getenv("XDG_CONFIG_HOME");
-    if (xdg && xdg[0]) {
-        size_t len = strlen(xdg) + strlen("/inky/kavita.toml") + 1;
-        char *path = malloc(len);
-        if (path) {
-            snprintf(path, len, "%s/inky/kavita.toml", xdg);
-        }
-        return path;
-    }
-
-    const char *home = getenv("HOME");
-    if (!home) {
-        return NULL;
-    }
-
-    size_t len = strlen(home) + strlen("/.config/inky/kavita.toml") + 1;
-    char *path = malloc(len);
-    if (path) {
-        snprintf(path, len, "%s/.config/inky/kavita.toml", home);
-    }
-    return path;
-}
 
 /*
  * Replace characters that are unsafe in a filename with underscores.
@@ -389,7 +383,7 @@ static void download_progress(size_t current, size_t total, void *user_data)
  */
 static char *run_kavita_catalog(int rows)
 {
-    char *config_path = kavita_config_path();
+    char *config_path = kavita_default_config_path();
     if (!config_path) {
         terminal_clear();
         printf("Could not determine config path.\n");
@@ -604,12 +598,22 @@ static char *run_kavita_catalog(int rows)
     }
 
     /* Write the metadata sidecar. */
+    int *chapter_ids = NULL;
+    int chapter_count = kavita_client_fetch_volume_chapters(
+        client, series_id, volumes[volume_idx].volume_id, &chapter_ids);
+
     kavita_meta_t meta = {
-        .kavita_volume_id = volumes[volume_idx].volume_id,
+        .kavita_library_id = library_id,
         .kavita_series_id = series_id,
+        .kavita_volume_id = volumes[volume_idx].volume_id,
         .title = volumes[volume_idx].title,
+        .chapters = {
+            .ids = chapter_ids,
+            .count = chapter_count > 0 ? chapter_count : 0,
+        },
     };
     kavita_meta_save(out_path, &meta);
+    free(chapter_ids);
 
     kavita_volumes_free(volumes, volume_count);
     free(series_name);
@@ -670,7 +674,7 @@ static void render_book_list(const book_entry_t *entries, int count,
     }
 
     printf("\n");
-    printf("Up/Down: select  Enter: open  q: quit\n");
+    printf("Up/Down: select  Enter: open  c: context  q: quit\n");
 
     /* Pad to keep the screen stable. */
     int used = 5 + total_items + 2;
@@ -679,6 +683,57 @@ static void render_book_list(const book_entry_t *entries, int count,
     }
 
     fflush(stdout);
+}
+
+/*
+ * Show a context menu for a downloaded Kavita book.
+ * Returns 1 if the entry should be removed from the list (deleted),
+ * 0 otherwise.
+ */
+static int run_kavita_context_menu(const char *epub_path, int rows)
+{
+    kavita_meta_t meta = {0};
+    int has_meta = kavita_meta_load(epub_path, &meta);
+    kavita_meta_free(&meta);
+
+    if (!has_meta) {
+        terminal_clear();
+        printf("No Kavita context available for this book.\n");
+        terminal_read_key();
+        return 0;
+    }
+
+    const char *items[] = {"Sync progress", "Delete book", "Cancel"};
+    int choice = run_select_list("Book options", items, 3, rows);
+
+    if (choice == 0) {
+        int chapter = 0;
+        int page = 0;
+        char updated_at[32] = {0};
+        if (kavita_sync_on_open(epub_path, &chapter, &page, updated_at, sizeof(updated_at))) {
+            terminal_clear();
+            printf("Progress synced.\n");
+        } else {
+            terminal_clear();
+            printf("Progress sync failed.\n");
+        }
+        terminal_read_key();
+    } else if (choice == 1) {
+        terminal_clear();
+        printf("Delete %s?\n", epub_path);
+        printf("y: confirm  any other key: cancel\n");
+        int key = terminal_read_key();
+        if (key == 'y' || key == 'Y') {
+            if (kavita_delete_book(epub_path)) {
+                return 1;
+            }
+            terminal_clear();
+            printf("Delete failed.\n");
+            terminal_read_key();
+        }
+    }
+
+    return 0;
 }
 
 /*
@@ -738,6 +793,24 @@ static char *run_book_list(int rows, int cols)
             } else if (count > 0) {
                 result = strdup(entries[selected].path);
                 running = 0;
+            }
+            break;
+        case 'c':
+        case 'C':
+            if (selected >= 0 && selected < count) {
+                if (run_kavita_context_menu(entries[selected].path, rows)) {
+                    /* Book was deleted; rescan the list. */
+                    book_list_free(entries, count);
+                    count = book_list_scan(books_dir, &entries);
+                    if (count < 0) {
+                        count = 0;
+                        entries = NULL;
+                    }
+                    total_items = count + (show_kavita ? 1 : 0);
+                    if (selected >= total_items) {
+                        selected = total_items > 0 ? total_items - 1 : 0;
+                    }
+                }
             }
             break;
         default:

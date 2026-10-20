@@ -192,11 +192,18 @@ static void reader_open_selected(app_t *app)
         return;
     }
 
+    const char *path = app->books[app->selected_book].path;
+
+    /* Merge local and remote progress for Kavita-sourced books. */
+    int sync_chapter = 0;
+    int sync_page = 0;
+    kavita_sync_on_open(path, &sync_chapter, &sync_page, NULL, 0);
+
     app->reader.cols = (SCREEN_WIDTH - 2 * MARGIN_X) / app->cell_w;
     app->reader.rows = (SCREEN_HEIGHT - 2 * MARGIN_Y) / app->cell_h;
     app->reader.status_rows = (STATUS_HEIGHT + app->cell_h - 1) / app->cell_h;
 
-    if (reader_open(&app->reader, app->books[app->selected_book].path)) {
+    if (reader_open(&app->reader, path)) {
         app->state = STATE_READER;
     }
 }
@@ -210,6 +217,11 @@ static void reader_open_path(app_t *app, const char *path)
         return;
     }
 
+    /* Merge local and remote progress for Kavita-sourced books. */
+    int sync_chapter = 0;
+    int sync_page = 0;
+    kavita_sync_on_open(path, &sync_chapter, &sync_page, NULL, 0);
+
     app->reader.cols = (SCREEN_WIDTH - 2 * MARGIN_X) / app->cell_w;
     app->reader.rows = (SCREEN_HEIGHT - 2 * MARGIN_Y) / app->cell_h;
     app->reader.status_rows = (STATUS_HEIGHT + app->cell_h - 1) / app->cell_h;
@@ -219,17 +231,82 @@ static void reader_open_path(app_t *app, const char *path)
     }
 }
 
+/* Forward declarations for the context menu. */
+static void render_kavita_list(app_t *app, const char *title,
+                               const char *const *items, int count,
+                               int selected, const char *message);
+static int kavita_wait_key(void);
+static int run_kavita_select(app_t *app, const char *title,
+                             const char *const *items, int count);
+
+/*
+ * Show a context menu for a downloaded Kavita book.
+ * Returns 1 if the entry should be removed from the list (deleted),
+ * 0 otherwise.
+ */
+static int run_kavita_context_menu(app_t *app, const char *epub_path)
+{
+    kavita_meta_t meta = {0};
+    int has_meta = kavita_meta_load(epub_path, &meta);
+    kavita_meta_free(&meta);
+
+    if (!has_meta) {
+        render_kavita_list(app, "Book options", NULL, 0, 0,
+                           "No Kavita context available.");
+        kavita_wait_key();
+        return 0;
+    }
+
+    const char *items[] = {"Sync progress", "Delete book", "Cancel"};
+    int choice = run_kavita_select(app, "Book options", items, 3);
+
+    if (choice == 0) {
+        int chapter = 0;
+        int page = 0;
+        if (kavita_sync_on_open(epub_path, &chapter, &page, NULL, 0)) {
+            render_kavita_list(app, "Book options", NULL, 0, 0,
+                               "Progress synced.");
+        } else {
+            render_kavita_list(app, "Book options", NULL, 0, 0,
+                               "Progress sync failed.");
+        }
+        kavita_wait_key();
+    } else if (choice == 1) {
+        const char *confirm_items[] = {"Confirm delete", "Cancel"};
+        int confirm = run_kavita_select(app, "Delete book?", confirm_items, 2);
+        if (confirm == 0) {
+            if (kavita_delete_book(epub_path)) {
+                return 1;
+            }
+            render_kavita_list(app, "Book options", NULL, 0, 0,
+                               "Delete failed.");
+            kavita_wait_key();
+        }
+    }
+
+    return 0;
+}
+
 /*
  * Close the current book and return to the book list.
  */
 static void reader_close_book(app_t *app)
 {
     char *previous_path = NULL;
+    int close_chapter = app->reader.current_chapter;
+    int close_page = app->reader.current_page;
+
     if (app->reader.book_path) {
         previous_path = strdup(app->reader.book_path);
     }
 
     reader_close(&app->reader);
+
+    /* Push progress to Kavita for downloaded books. */
+    if (previous_path) {
+        kavita_sync_on_close(previous_path, close_chapter, close_page);
+    }
+
     app->state = STATE_LIST;
 
     /* Rescan the book list so progress % is up to date. */
@@ -298,7 +375,7 @@ static void render_list(app_t *app)
     }
 
     y = SCREEN_HEIGHT - app->cell_h - 4;
-    draw_text_line(app, "Up/Down: select  Enter: open  Esc/q: quit", MARGIN_X, y);
+    draw_text_line(app, "Up/Down: select  Enter: open  c: context  Esc/q: quit", MARGIN_X, y);
 
     SDL_RenderPresent(app->renderer);
 }
@@ -391,6 +468,24 @@ static void app_handle_key(app_t *app, SDL_Keycode key)
                 reader_open_selected(app);
             }
             break;
+        case SDLK_c:
+            if (app->selected_book >= 0 && app->selected_book < app->book_count) {
+                if (run_kavita_context_menu(app, app->books[app->selected_book].path)) {
+                    /* Book was deleted; rescan the list. */
+                    book_list_free(app->books, app->book_count);
+                    const char *books_dir = find_books_dir();
+                    app->book_count = book_list_scan(books_dir, &app->books);
+                    if (app->book_count < 0) {
+                        app->book_count = 0;
+                        app->books = NULL;
+                    }
+                    int total = app->book_count + (app->show_kavita ? 1 : 0);
+                    if (app->selected_book >= total) {
+                        app->selected_book = total > 0 ? total - 1 : 0;
+                    }
+                }
+            }
+            break;
         default:
             break;
         }
@@ -467,35 +562,6 @@ static void app_handle_click(app_t *app, int x, int y)
             reader_navigate(&app->reader, 1);
         }
     }
-}
-
-/*
- * Return the path to the Kavita config file.
- * Caller must free the returned string.
- */
-static char *kavita_config_path(void)
-{
-    const char *xdg = getenv("XDG_CONFIG_HOME");
-    if (xdg && xdg[0]) {
-        size_t len = strlen(xdg) + strlen("/inky/kavita.toml") + 1;
-        char *path = malloc(len);
-        if (path) {
-            snprintf(path, len, "%s/inky/kavita.toml", xdg);
-        }
-        return path;
-    }
-
-    const char *home = getenv("HOME");
-    if (!home) {
-        return NULL;
-    }
-
-    size_t len = strlen(home) + strlen("/.config/inky/kavita.toml") + 1;
-    char *path = malloc(len);
-    if (path) {
-        snprintf(path, len, "%s/.config/inky/kavita.toml", home);
-    }
-    return path;
 }
 
 /*
@@ -744,7 +810,7 @@ static void sdl_download_progress(size_t current, size_t total, void *user_data)
  */
 static char *run_kavita_catalog(app_t *app)
 {
-    char *config_path = kavita_config_path();
+    char *config_path = kavita_default_config_path();
     if (!config_path) {
         render_kavita_list(app, "Kavita", NULL, 0, 0,
                            "Could not determine config path.");
@@ -938,12 +1004,22 @@ static char *run_kavita_catalog(app_t *app)
     }
 
     /* Write the metadata sidecar. */
+    int *chapter_ids = NULL;
+    int chapter_count = kavita_client_fetch_volume_chapters(
+        client, series_id, volumes[volume_idx].volume_id, &chapter_ids);
+
     kavita_meta_t meta = {
-        .kavita_volume_id = volumes[volume_idx].volume_id,
+        .kavita_library_id = library_id,
         .kavita_series_id = series_id,
+        .kavita_volume_id = volumes[volume_idx].volume_id,
         .title = volumes[volume_idx].title,
+        .chapters = {
+            .ids = chapter_ids,
+            .count = chapter_count > 0 ? chapter_count : 0,
+        },
     };
     kavita_meta_save(out_path, &meta);
+    free(chapter_ids);
 
     kavita_volumes_free(volumes, volume_count);
     free(filename);

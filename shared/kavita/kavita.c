@@ -4,6 +4,10 @@
  * Kavita integration implementation for PC.
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "kavita/kavita.h"
 
 #include <curl/curl.h>
@@ -188,13 +192,15 @@ int kavita_meta_load(const char *epub_path, kavita_meta_t *meta)
         return 0;
     }
 
-    cJSON *volume_id = cJSON_GetObjectItem(root, "kavita_volume_id");
+    cJSON *library_id = cJSON_GetObjectItem(root, "kavita_library_id");
     cJSON *series_id = cJSON_GetObjectItem(root, "kavita_series_id");
+    cJSON *volume_id = cJSON_GetObjectItem(root, "kavita_volume_id");
     cJSON *title = cJSON_GetObjectItem(root, "title");
     cJSON *chapter_ids = cJSON_GetObjectItem(root, "chapter_ids");
 
-    meta->kavita_volume_id = cJSON_IsNumber(volume_id) ? volume_id->valueint : 0;
+    meta->kavita_library_id = cJSON_IsNumber(library_id) ? library_id->valueint : 0;
     meta->kavita_series_id = cJSON_IsNumber(series_id) ? series_id->valueint : 0;
+    meta->kavita_volume_id = cJSON_IsNumber(volume_id) ? volume_id->valueint : 0;
 
     if (cJSON_IsString(title)) {
         meta->title = strdup(title->valuestring);
@@ -224,8 +230,9 @@ int kavita_meta_save(const char *epub_path, const kavita_meta_t *meta)
         return 0;
     }
 
-    cJSON_AddNumberToObject(root, "kavita_volume_id", meta->kavita_volume_id);
+    cJSON_AddNumberToObject(root, "kavita_library_id", meta->kavita_library_id);
     cJSON_AddNumberToObject(root, "kavita_series_id", meta->kavita_series_id);
+    cJSON_AddNumberToObject(root, "kavita_volume_id", meta->kavita_volume_id);
 
     if (meta->title) {
         cJSON_AddStringToObject(root, "title", meta->title);
@@ -1277,4 +1284,540 @@ int kavita_client_download_volume(kavita_client_t *client,
     }
 
     return 1;
+}
+
+/*
+ * Kavita progress sync helpers.
+ *
+ * These build on top of the client and sidecar primitives defined earlier in
+ * this file.
+ */
+
+#include "progress/progress.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+/*
+ * Return the default Kavita config path on this platform.
+ * Caller must free the returned string.
+ */
+char *kavita_default_config_path(void)
+{
+    const char *xdg = getenv("XDG_CONFIG_HOME");
+    if (xdg && xdg[0]) {
+        size_t len = strlen(xdg) + strlen("/inky/kavita.toml") + 1;
+        char *path = malloc(len);
+        if (path) {
+            snprintf(path, len, "%s/inky/kavita.toml", xdg);
+        }
+        return path;
+    }
+
+    const char *home = getenv("HOME");
+    if (home && home[0]) {
+        size_t len = strlen(home) + strlen("/.config/inky/kavita.toml") + 1;
+        char *path = malloc(len);
+        if (path) {
+            snprintf(path, len, "%s/.config/inky/kavita.toml", home);
+        }
+        return path;
+    }
+
+    return NULL;
+}
+
+/*
+ * Format the current UTC time as ISO-8601 into the provided buffer.
+ */
+static int format_now_iso8601(char *buffer, size_t size)
+{
+    time_t now = time(NULL);
+    struct tm *tm_info = gmtime(&now);
+    if (!tm_info) {
+        return 0;
+    }
+    return strftime(buffer, size, "%Y-%m-%dT%H:%M:%SZ", tm_info) > 0;
+}
+
+/*
+ * Parse an ISO-8601 UTC timestamp into a time_t.
+ * Handles both "Z" suffix and fractional seconds (e.g. ".1234567Z").
+ * Returns 1 on success, 0 on failure.
+ */
+static int parse_iso8601_utc(const char *str, time_t *out)
+{
+    if (!str || !out || str[0] == '\0') {
+        return 0;
+    }
+
+    char copy[64];
+    snprintf(copy, sizeof(copy), "%s", str);
+
+    /* Find the separator between seconds and the rest. */
+    char *dot = strchr(copy, '.');
+    char *z = strchr(copy, 'Z');
+
+    if (dot && (!z || dot < z)) {
+        /* Truncate fractional seconds; strptime cannot parse them portably. */
+        *dot = '\0';
+    }
+
+    struct tm tm = {0};
+    if (!strptime(copy, "%Y-%m-%dT%H:%M:%S", &tm)) {
+        return 0;
+    }
+
+    time_t t = timegm(&tm);
+    if (t == (time_t)-1) {
+        return 0;
+    }
+
+    *out = t;
+    return 1;
+}
+
+/*
+ * Compare two ISO-8601 UTC timestamps.
+ * Returns >0 if a is newer, <0 if b is newer, 0 if equal or unparseable.
+ */
+static int compare_timestamps(const char *a, const char *b)
+{
+    time_t ua, ub;
+    if (!parse_iso8601_utc(a, &ua) || !parse_iso8601_utc(b, &ub)) {
+        return 0;
+    }
+
+    if (ua > ub) {
+        return 1;
+    }
+    if (ua < ub) {
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * Perform an HTTP POST with a JSON body and return the response body.
+ *
+ * Returns 1 on HTTP 200, 0 otherwise. The body is returned in *body, which
+ * must be freed by the caller (may be set even on failure).
+ */
+static int http_post_json(kavita_client_t *client, const char *path,
+                          const char *json_body, char **body, long *status_code)
+{
+    if (!client || !client->curl || !path || !body || !status_code) {
+        return 0;
+    }
+
+    *body = NULL;
+    *status_code = 0;
+
+    char *url = build_url(client, path);
+    if (!url) {
+        return 0;
+    }
+
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    headers = curl_slist_append(headers, "Accept: application/json");
+
+    curl_easy_setopt(client->curl, CURLOPT_URL, url);
+    curl_easy_setopt(client->curl, CURLOPT_POST, 1L);
+    curl_easy_setopt(client->curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(client->curl, CURLOPT_POSTFIELDS, json_body);
+    curl_easy_setopt(client->curl, CURLOPT_WRITEFUNCTION, write_memory_cb);
+    curl_easy_setopt(client->curl, CURLOPT_WRITEDATA, body);
+    curl_easy_setopt(client->curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(client->curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(client->curl, CURLOPT_USERAGENT, "Inky/0.1");
+
+    CURLcode res = curl_easy_perform(client->curl);
+
+    curl_slist_free_all(headers);
+    free(url);
+
+    if (res != CURLE_OK) {
+        free(*body);
+        *body = NULL;
+        return 0;
+    }
+
+    curl_easy_getinfo(client->curl, CURLINFO_RESPONSE_CODE, status_code);
+
+    if (*status_code != 200) {
+        free(*body);
+        *body = NULL;
+        return 0;
+    }
+
+    return 1;
+}
+
+int kavita_client_fetch_volume_chapters(kavita_client_t *client,
+                                        int series_id, int volume_id,
+                                        int **chapter_ids)
+{
+    if (!client || series_id <= 0 || volume_id <= 0 || !chapter_ids) {
+        return -1;
+    }
+
+    *chapter_ids = NULL;
+
+    char path[512];
+    snprintf(path, sizeof(path), "/api/Opds/%s/series/%d/volume/%d",
+             client->config.api_key, series_id, volume_id);
+
+    char *body = NULL;
+    long status_code = 0;
+    if (!http_get(client, path, &body, &status_code)) {
+        return -1;
+    }
+
+    opds_entry_t *entries = NULL;
+    int count = parse_opds_feed(body, &entries);
+    free(body);
+
+    if (count < 0) {
+        return -1;
+    }
+
+    if (count == 0) {
+        return 0;
+    }
+
+    int *ids = malloc((size_t)count * sizeof(int));
+    if (!ids) {
+        for (int i = 0; i < count; i++) {
+            opds_entry_free(&entries[i]);
+        }
+        free(entries);
+        return -1;
+    }
+
+    int valid = 0;
+    for (int i = 0; i < count; i++) {
+        ids[i] = 0;
+        if (entries[i].acq_link) {
+            ids[i] = extract_id_after_marker(entries[i].acq_link, "/chapter/");
+        }
+        if (ids[i] > 0) {
+            valid++;
+        }
+    }
+
+    for (int i = 0; i < count; i++) {
+        opds_entry_free(&entries[i]);
+    }
+    free(entries);
+
+    if (valid == 0) {
+        free(ids);
+        return 0;
+    }
+
+    *chapter_ids = ids;
+    return count;
+}
+
+int kavita_client_get_progress(kavita_client_t *client, int chapter_id,
+                               int *page_num,
+                               char *updated_at, size_t updated_at_size)
+{
+    if (!client || chapter_id <= 0 || !page_num) {
+        return 0;
+    }
+
+    if (updated_at && updated_at_size > 0) {
+        updated_at[0] = '\0';
+    }
+
+    char path[512];
+    snprintf(path, sizeof(path), "/api/Reader/get-progress?chapterId=%d&apiKey=%s",
+             chapter_id, client->config.api_key);
+
+    char *body = NULL;
+    long status_code = 0;
+    if (!http_get(client, path, &body, &status_code)) {
+        return 0;
+    }
+
+    int ok = 0;
+    cJSON *root = cJSON_Parse(body);
+    if (root) {
+        cJSON *page = cJSON_GetObjectItem(root, "pageNum");
+        if (cJSON_IsNumber(page)) {
+            *page_num = page->valueint;
+            ok = 1;
+        }
+
+        if (updated_at && updated_at_size > 0) {
+            cJSON *ts = cJSON_GetObjectItem(root, "lastModifiedUtc");
+            if (cJSON_IsString(ts)) {
+                snprintf(updated_at, updated_at_size, "%s", ts->valuestring);
+            }
+        }
+
+        cJSON_Delete(root);
+    }
+
+    free(body);
+    return ok;
+}
+
+int kavita_client_set_progress(kavita_client_t *client, int chapter_id,
+                               int page_num,
+                               int volume_id, int series_id, int library_id,
+                               const char *updated_at)
+{
+    if (!client || chapter_id <= 0 || volume_id <= 0 || series_id <= 0 ||
+        library_id <= 0) {
+        return 0;
+    }
+
+    char ts[32];
+    if (!updated_at || updated_at[0] == '\0') {
+        if (!format_now_iso8601(ts, sizeof(ts))) {
+            return 0;
+        }
+        updated_at = ts;
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        return 0;
+    }
+
+    cJSON_AddNumberToObject(root, "chapterId", chapter_id);
+    cJSON_AddNumberToObject(root, "volumeId", volume_id);
+    cJSON_AddNumberToObject(root, "seriesId", series_id);
+    cJSON_AddNumberToObject(root, "libraryId", library_id);
+    cJSON_AddNumberToObject(root, "pageNum", page_num);
+    cJSON_AddStringToObject(root, "lastModifiedUtc", updated_at);
+
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    if (!json) {
+        return 0;
+    }
+
+    char path[512];
+    snprintf(path, sizeof(path), "/api/Reader/progress?apiKey=%s", client->config.api_key);
+
+    char *body = NULL;
+    long status_code = 0;
+    int ok = http_post_json(client, path, json, &body, &status_code);
+
+    free(json);
+    free(body);
+    return ok;
+}
+
+/*
+ * Load the default config, create a client, and return it.
+ * Returns NULL if no config or invalid config.
+ */
+static kavita_client_t *open_default_client(void)
+{
+    char *path = kavita_default_config_path();
+    if (!path) {
+        return NULL;
+    }
+
+    kavita_config_t cfg = {0};
+    if (!kavita_config_load(path, &cfg)) {
+        free(path);
+        return NULL;
+    }
+    free(path);
+
+    kavita_client_t *client = kavita_client_new(&cfg);
+    kavita_config_free(&cfg);
+    return client;
+}
+
+int kavita_sync_on_open(const char *epub_path,
+                        int *chapter, int *page,
+                        char *updated_at, size_t updated_at_size)
+{
+    if (!epub_path || !chapter || !page) {
+        return 0;
+    }
+
+    kavita_meta_t meta = {0};
+    if (!kavita_meta_load(epub_path, &meta)) {
+        return 0;
+    }
+
+    if (meta.kavita_series_id <= 0 || meta.kavita_volume_id <= 0 ||
+        meta.kavita_library_id <= 0 || meta.chapters.count <= 0) {
+        kavita_meta_free(&meta);
+        return 0;
+    }
+
+    int local_chapter = 0;
+    int local_page = 0;
+    char local_updated_at[32] = {0};
+    if (!progress_load_full(epub_path, &local_chapter, &local_page,
+                            local_updated_at, sizeof(local_updated_at))) {
+        local_chapter = 0;
+        local_page = 0;
+    }
+
+    kavita_client_t *client = open_default_client();
+    if (!client) {
+        /* No config: just keep local progress. */
+        *chapter = local_chapter;
+        *page = local_page;
+        if (updated_at && updated_at_size > 0) {
+            snprintf(updated_at, updated_at_size, "%s", local_updated_at);
+        }
+        kavita_meta_free(&meta);
+        return 1;
+    }
+
+    int final_chapter = local_chapter;
+    int final_page = local_page;
+    char final_updated_at[32] = {0};
+    snprintf(final_updated_at, sizeof(final_updated_at), "%s", local_updated_at);
+
+    /*
+     * Most volumes contain a single Kavita chapter that covers the whole book.
+     * In that case we treat the local spine index as a book-level page number.
+     * When a volume has multiple Kavita chapters we assume a 1:1 spine-to-chapter
+     * mapping and sync page within the current chapter.
+     */
+    int chapter_id = 0;
+    int is_single_chapter = (meta.chapters.count == 1);
+    if (is_single_chapter) {
+        chapter_id = meta.chapters.ids[0];
+    } else if (local_chapter >= 0 && local_chapter < meta.chapters.count) {
+        chapter_id = meta.chapters.ids[local_chapter];
+    }
+
+    if (chapter_id > 0) {
+        int remote_page = 0;
+        char remote_updated_at[32] = {0};
+        if (kavita_client_get_progress(client, chapter_id, &remote_page,
+                                       remote_updated_at, sizeof(remote_updated_at))) {
+            int remote_is_newer = 0;
+            if (local_updated_at[0] == '\0' && remote_updated_at[0] != '\0') {
+                remote_is_newer = 1;
+            } else if (compare_timestamps(remote_updated_at, local_updated_at) > 0) {
+                remote_is_newer = 1;
+            }
+
+            if (remote_is_newer) {
+                if (is_single_chapter) {
+                    final_chapter = remote_page > 0 ? remote_page - 1 : 0;
+                    final_page = 0;
+                } else {
+                    final_page = remote_page;
+                }
+                snprintf(final_updated_at, sizeof(final_updated_at), "%s", remote_updated_at);
+            }
+        }
+    }
+
+    kavita_client_free(client);
+
+    /* Persist the merged result so reader_open picks it up. */
+    progress_save_full(epub_path, final_chapter, final_page, final_updated_at);
+
+    *chapter = final_chapter;
+    *page = final_page;
+    if (updated_at && updated_at_size > 0) {
+        snprintf(updated_at, updated_at_size, "%s", final_updated_at);
+    }
+
+    kavita_meta_free(&meta);
+    return 1;
+}
+
+int kavita_sync_on_close(const char *epub_path, int chapter, int page)
+{
+    if (!epub_path) {
+        return 0;
+    }
+
+    kavita_meta_t meta = {0};
+    if (!kavita_meta_load(epub_path, &meta)) {
+        return 0;
+    }
+
+    if (meta.kavita_series_id <= 0 || meta.kavita_volume_id <= 0 ||
+        meta.kavita_library_id <= 0 || meta.chapters.count <= 0) {
+        kavita_meta_free(&meta);
+        return 0;
+    }
+
+    /*
+     * See kavita_sync_on_open for the mapping rationale.
+     */
+    int chapter_id = 0;
+    int kavita_page = 0;
+    if (meta.chapters.count == 1) {
+        chapter_id = meta.chapters.ids[0];
+        kavita_page = chapter + 1;
+    } else if (chapter >= 0 && chapter < meta.chapters.count) {
+        chapter_id = meta.chapters.ids[chapter];
+        kavita_page = page;
+    }
+
+    if (chapter_id <= 0 || kavita_page < 0) {
+        kavita_meta_free(&meta);
+        return 0;
+    }
+
+    kavita_client_t *client = open_default_client();
+    if (!client) {
+        kavita_meta_free(&meta);
+        return 0;
+    }
+
+    char updated_at[32];
+    if (!format_now_iso8601(updated_at, sizeof(updated_at))) {
+        kavita_client_free(client);
+        kavita_meta_free(&meta);
+        return 0;
+    }
+
+    int ok = kavita_client_set_progress(client, chapter_id, kavita_page,
+                                        meta.kavita_volume_id,
+                                        meta.kavita_series_id,
+                                        meta.kavita_library_id,
+                                        updated_at);
+
+    kavita_client_free(client);
+    kavita_meta_free(&meta);
+
+    /* TODO: on ESP32, queue the update here if ok == 0. */
+
+    return ok;
+}
+
+int kavita_delete_book(const char *epub_path)
+{
+    if (!epub_path) {
+        return 0;
+    }
+
+    char *meta_path = kavita_meta_path(epub_path);
+    if (!meta_path) {
+        return 0;
+    }
+
+    int ok = 1;
+    if (remove(epub_path) != 0) {
+        ok = 0;
+    }
+    if (remove(meta_path) != 0) {
+        ok = 0;
+    }
+
+    free(meta_path);
+    return ok;
 }

@@ -47,6 +47,12 @@ int kavita_config_load(const char *path, kavita_config_t *cfg);
 void kavita_config_free(kavita_config_t *cfg);
 
 /*
+ * Return the default Kavita config path on this platform.
+ * Caller must free the returned string.
+ */
+char *kavita_default_config_path(void);
+
+/*
  * Kavita-side chapter ID mapping stored alongside a downloaded EPUB.
  */
 typedef struct {
@@ -58,8 +64,9 @@ typedef struct {
  * Per-book metadata sidecar.
  */
 typedef struct {
-    int kavita_volume_id;
+    int kavita_library_id;
     int kavita_series_id;
+    int kavita_volume_id;
     char *title;
     time_t downloaded_at;
     kavita_chapter_map_t chapters;
@@ -194,6 +201,64 @@ int kavita_client_download_volume(kavita_client_t *client,
                                   const char *out_path,
                                   kavita_download_progress_t progress,
                                   void *user_data);
+
+/*
+ * Fetch the ordered list of Kavita chapter IDs for a volume.
+ *
+ * Returns the number of chapters, or -1 on error. The caller must free the
+ * array with free().
+ */
+int kavita_client_fetch_volume_chapters(kavita_client_t *client,
+                                        int series_id, int volume_id,
+                                        int **chapter_ids);
+
+/*
+ * Get the stored progress for a single Kavita chapter.
+ *
+ * Returns 1 if the server returned progress, 0 otherwise (including network
+ * errors and chapters with no progress). `page_num` is only written on success.
+ */
+int kavita_client_get_progress(kavita_client_t *client, int chapter_id,
+                               int *page_num,
+                               char *updated_at, size_t updated_at_size);
+
+/*
+ * Save progress for a single Kavita chapter.
+ *
+ * `updated_at` may be NULL; the current UTC time is used in that case.
+ * Returns 1 on success, 0 on failure.
+ */
+int kavita_client_set_progress(kavita_client_t *client, int chapter_id,
+                               int page_num,
+                               int volume_id, int series_id, int library_id,
+                               const char *updated_at);
+
+/*
+ * High-level open/close sync helpers.
+ *
+ * These load the local sidecar and config, talk to Kavita, and merge local
+ * and remote progress using the `updated_at` timestamp. They are safe to call
+ * on any book path; they return 0 silently when the book has no sidecar or
+ * no config, so callers do not need to check first.
+ *
+ * kavita_sync_on_open loads local progress, fetches remote progress for the
+ * current chapter, writes the merged result back to local storage, and fills
+ * chapter/page/updated_at with the position to use.
+ *
+ * kavita_sync_on_close pushes the given chapter/page to Kavita immediately on
+ * PC. On ESP32 this will connect Wi-Fi on demand, push, then disconnect, and
+ * queue the update if the push fails.
+ */
+int kavita_sync_on_open(const char *epub_path,
+                        int *chapter, int *page,
+                        char *updated_at, size_t updated_at_size);
+int kavita_sync_on_close(const char *epub_path, int chapter, int page);
+
+/*
+ * Delete a downloaded Kavita book, removing both the EPUB and its sidecar.
+ * Returns 1 on success, 0 on failure.
+ */
+int kavita_delete_book(const char *epub_path);
 
 /*
  * Free arrays returned by the catalog fetch functions.

@@ -44,7 +44,7 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 7. **Book library** ✅: selectable Books/ folder with saved progress shown next to each title.
 8. **Kavita auth + catalog** ✅: log in with an OPDS API key, browse series, and paginate long catalogs.
 9. **Download + read** ✅: pull an EPUB from Kavita and open it.
-10. **Progress sync**: upload and download reading position with Kavita.
+10. **Progress sync** ✅: upload and download reading position with Kavita; context menu for sync/delete.
 11. **Port to ESP-IDF**: add e-ink and SD card drivers.
 
 ## Tech stack
@@ -83,6 +83,7 @@ Controls:
 |---|---|
 | `↑` / `↓` (arrows) | Select a book in the library |
 | `Enter` | Open the selected book or `[Kavita]` catalog entry |
+| `c` | Context menu for a downloaded Kavita book (sync / delete) |
 | `←` / `→` (arrows) | Previous / next catalog page (in Kavita lists) |
 | `←` (left arrow) | Previous page (while reading) |
 | `→` (right arrow) | Next page (while reading) |
@@ -104,6 +105,7 @@ Controls:
 |---|---|
 | `↑` / `↓` (arrows) | Select a book in the library |
 | `Enter` | Open the selected book or `[Kavita]` catalog entry |
+| `c` | Context menu for a downloaded Kavita book (sync / delete) |
 | `←` / `→` or `Page Up` / `Page Down` | Previous / next catalog page (in Kavita lists) |
 | `←` (left arrow) / `Page Up` | Previous page (while reading) |
 | `→` (right arrow) / `Page Down` / `Space` | Next page (while reading) |
@@ -127,7 +129,14 @@ Launch the reader without arguments, select `[Kavita]` at the bottom of the book
 
 1. Series list — paginated if the library is large.
 2. Volumes for the selected series.
-3. Downloaded EPUBs are saved to `Books/` with a `.meta.json` sidecar containing `kavita_volume_id` and `kavita_series_id`.
+3. Downloaded EPUBs are saved to `Books/` with a `.meta.json` sidecar containing `kavita_volume_id`, `kavita_series_id`, `kavita_library_id`, and a spine-to-chapter ID map.
+
+Progress is synced with Kavita automatically:
+
+- On **open**: local progress is merged with the remote progress; whichever has the newer `updated_at` timestamp wins.
+- On **close**: local progress is pushed to Kavita immediately on PC.
+- On **device**: Wi-Fi is connected on demand, progress is pushed, then disconnected; failed pushes are queued for the next session.
+- Context menu (`c` on a downloaded book): manually sync progress or delete the book and its sidecar.
 
 ## Module layout
 
@@ -165,8 +174,6 @@ Launch the reader without arguments, select `[Kavita]` at the bottom of the book
 
 These items are not yet covered by the high-level milestones above:
 
-- [ ] Context menu for downloaded Kavita books: Open / Sync progress / Delete.
-- [ ] Delete action removes `<Title>.epub`, `<Title>.epub.meta.json`, and any companion files together.
 - [ ] Queue progress updates when offline; drain queue on next successful Kavita connection.
 - [ ] On device: Wi-Fi connects on demand for Kavita operations; disconnect when done.
 - [ ] Per-network VPN flag in `network.toml` so home LAN connects directly while remote networks use OpenVPN.
