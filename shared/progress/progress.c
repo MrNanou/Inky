@@ -23,6 +23,7 @@
 #include <unistd.h>
 #include <limits.h>
 #include <time.h>
+#include <errno.h>
 
 /*
  * Very simple hash of a string. Not cryptographic; just maps paths to short
@@ -296,4 +297,25 @@ int progress_save_full(const char *epub_path, int chapter, int page,
 int progress_save(const char *epub_path, int chapter, int page)
 {
     return progress_save_full(epub_path, chapter, page, NULL);
+}
+
+int progress_delete(const char *epub_path)
+{
+    if (!epub_path) {
+        return 0;
+    }
+
+    char *path = progress_file_path(epub_path);
+    if (!path) {
+        return 0;
+    }
+
+    /*
+     * Removing a non-existent file is not an error; the goal is simply that
+     * no progress file remains for this path.
+     */
+    int rc = remove(path);
+    free(path);
+
+    return rc == 0 || errno == ENOENT;
 }

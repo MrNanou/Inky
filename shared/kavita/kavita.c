@@ -1818,6 +1818,14 @@ int kavita_delete_book(const char *epub_path)
         ok = 0;
     }
 
+    /*
+     * Remove local progress as well. If the book is ever re-downloaded,
+     * Kavita's remote progress will be pulled on open and used instead.
+     */
+    if (!progress_delete(epub_path)) {
+        ok = 0;
+    }
+
     free(meta_path);
     return ok;
 }

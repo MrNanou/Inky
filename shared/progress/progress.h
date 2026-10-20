@@ -43,4 +43,10 @@ int progress_load_full(const char *epub_path, int *chapter, int *page,
 int progress_save_full(const char *epub_path, int chapter, int page,
                        const char *updated_at);
 
+/*
+ * Delete the saved progress file for a given EPUB path, if it exists.
+ * Returns 1 if the file is gone (or never existed), 0 on error.
+ */
+int progress_delete(const char *epub_path);
+
 #endif
