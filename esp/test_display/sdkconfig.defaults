@@ -1,0 +1,3 @@
+# LilyGo T5-4.7-S3 has 8 MB octal PSRAM; the display framebuffer needs it.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
