@@ -2,7 +2,7 @@
 
 A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo T5 e-paper board. Inky reads DRM-free EPUBs from a microSD card and syncs reading progress with a self-hosted [Kavita](https://www.kavitareader.com/) instance.
 
-> **Status:** active prototype. The core engine (EPUB parsing, cell-based layout, Kavita sync) runs on Linux (terminal + SDL2). The ESP-IDF port to the LilyGo T5-4.7-S3 has started; the display, SD card, battery ADC, and deep sleep are validated.
+> **Status:** active prototype. The core engine (EPUB parsing, cell-based layout, Kavita sync) runs on Linux (terminal + SDL2). The ESP-IDF port to the LilyGo T5-4.7-S3 can render the first page of an EPUB from the SD card.
 
 ## Hardware target
 
@@ -48,7 +48,7 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 ## ESP32 port plan
 
 1. **Phase 0 — Project skeleton** ✅: `esp/inky/` builds and draws "Inky" on the e-paper.
-2. **Phase 1 — Shared engine core**: port cell-based layout, XML scanner, and EPUB spine parsing with `miniz`.
+2. **Phase 1 — Shared engine core** ✅: port cell-based layout, XML scanner, and EPUB spine parsing with `miniz`; render the first spine item on the e-paper.
 3. **Phase 2 — SD catalog UI**: scan `Books/` on the SD card and render a selectable list.
 4. **Phase 3 — Reader**: open a book, render pages, turn pages across chapters, save progress.
 5. **Phase 4 — Sleep, shutdown, and state**: deep sleep between page turns; long-term shutdown with `epd_poweroff_all()` and GPIO-only wake.
@@ -100,6 +100,16 @@ sudo -E env "PATH=$PATH" idf.py -p /dev/ttyACM0 flash
 ```
 
 If the board is in deep sleep and `/dev/ttyACM0` is missing, use `esp/inky/flash_when_awake.sh`, which waits for the serial port to enumerate and flashes immediately.
+
+### SD card format
+
+The ESP-IDF FATFS driver in this project reliably mounts the card only as a **superfloppy** (FAT32 starting at sector 0, no partition table). Format the whole device, not a partition:
+
+```bash
+sudo mkfs.vfat -F 32 -I -n INKY /dev/sdX
+```
+
+Replace `/dev/sdX` with your card's device node. Copy EPUBs to the root of the card.
 
 ## Development notes
 
