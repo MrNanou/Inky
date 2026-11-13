@@ -24,7 +24,7 @@
  *
  **************************************************************************/
 
-#include "miniz.h"
+#include "miniz_all.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -24,7 +24,7 @@
  * THE SOFTWARE.
  *
  **************************************************************************/
-#include "miniz.h"
+#include "miniz_all.h"
 
 #ifndef MINIZ_NO_ARCHIVE_APIS
 
