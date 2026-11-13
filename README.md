@@ -2,7 +2,7 @@
 
 A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo T5 e-paper board. Inky reads DRM-free EPUBs from a microSD card and syncs reading progress with a self-hosted [Kavita](https://www.kavitareader.com/) instance.
 
-> **Status:** early prototype. The engine is being developed on Linux with a terminal reader and an SDL2 reader, and will be ported to ESP-IDF once the core is solid.
+> **Status:** active prototype. The core engine (EPUB parsing, cell-based layout, Kavita sync) runs on Linux (terminal + SDL2). The ESP-IDF port to the LilyGo T5-4.7-S3 has started; the display, SD card, battery ADC, and deep sleep are validated.
 
 ## Hardware target
 
@@ -28,24 +28,33 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 | Path | Purpose |
 |---|---|
 | `pc/terminal_reader/` | Terminal EPUB reader prototype |
-| `pc/sdl_reader/` | SDL2 paginated reader |
-| `shared/` | Platform-independent core: EPUB parser, HTML stripper, layout engine, progress persistence, reading session, Kavita client |
-| `esp/` | ESP-IDF firmware (created at porting time) |
-| `docs/` | Notes, architecture diagrams, API references (created when needed) |
+| `pc/sdl_reader/` | SDL2 paginated reader prototype |
+| `shared/` | Platform-independent core: EPUB parser, layout engine, Kavita client |
+| `esp/test_display/` | Hardware smoke test: EPD, SD card, battery ADC, deep sleep |
+| `esp/inky/` | Main ESP-IDF firmware (port in progress) |
+| `docs/` | Notes, architecture diagrams, API references |
 
 ## Prototype milestones
 
 1. **Hello EPUB** ✅: open a book, extract chapters, print the first one.
-2. **Terminal reader** ✅: word-wrap, paginate, and navigate chapters with left/right arrows.
-3. **Code modularity** ✅: split the monolithic `main.c` into feature-based modules (epub, html, layout, terminal).
-4. **Progress persistence** ✅: remember chapter and page across sessions in `~/.local/state/inky/progress/`.
-5. **Bottom status bar** ✅: show current chapter page percentage and overall book percentage.
-6. **SDL reader** ✅: render pages in a 960x540 SDL2 window with keyboard navigation.
-7. **Book library** ✅: selectable Books/ folder with saved progress shown next to each title.
-8. **Kavita auth + catalog** ✅: log in with an OPDS API key, browse series, and paginate long catalogs.
-9. **Download + read** ✅: pull an EPUB from Kavita and open it.
-10. **Progress sync** ✅: upload and download reading position with Kavita; context menu for sync/delete.
-11. **Port to ESP-IDF**: add e-ink and SD card drivers.
+2. **Text layout** ✅: word-wrap and paginate for a fixed screen size.
+3. **SDL reader** ✅: render pages in a window with Page Up / Page Down.
+4. **Kavita auth** ✅: log in and fetch the OPDS catalog.
+5. **Download + read** ✅: pull an EPUB from Kavita and open it.
+6. **Progress sync** ✅: save and load reading position with Kavita.
+7. **ESP-IDF hardware bring-up** ✅: display, SD card, battery ADC, deep sleep.
+8. **ESP-IDF reader port** (in progress): run the shared engine on the LilyGo board.
+
+## ESP32 port plan
+
+1. **Phase 0 — Project skeleton** ✅: `esp/inky/` builds and draws "Inky" on the e-paper.
+2. **Phase 1 — Shared engine core**: port cell-based layout, XML scanner, and EPUB spine parsing with `miniz`.
+3. **Phase 2 — SD catalog UI**: scan `Books/` on the SD card and render a selectable list.
+4. **Phase 3 — Reader**: open a book, render pages, turn pages across chapters, save progress.
+5. **Phase 4 — Sleep, shutdown, and state**: deep sleep between page turns; long-term shutdown with `epd_poweroff_all()` and GPIO-only wake.
+6. **Phase 5 — Wi-Fi + Kavita**: on-demand sync and download.
+7. **Phase 5b — OpenVPN tunnel** (optional): reach Kavita behind the home VPN.
+8. **Phase 6 — Polish**: fonts, cover thumbnails, battery-aware refresh, settings UI.
 
 ## Tech stack
 
@@ -53,23 +62,18 @@ A portable e-ink ebook reader built around an ESP32-S3, targeting a 4.7" LilyGo 
 |---|---|---|
 | Language | C / C++ | C / C++ |
 | Build system | Makefile | ESP-IDF CMake |
-| Display | terminal / SDL2 | GxEPD2 / LOVYANGFX |
-| ZIP / EPUB | libzip / miniz | miniz |
+| Display | terminal / SDL2 | LilyGo EPD47 driver (4-bit grayscale) |
+| ZIP / EPUB | libzip | miniz |
 | XML | hand-rolled parser | hand-rolled parser |
 | JSON | cJSON | cJSON |
 | HTTP / HTTPS | libcurl | ESP HTTP client |
-| Font | FreeType | FreeType or lighter renderer |
+| Font | DejaVu Sans Mono (SDL) / built-in bitmap | LilyGo bundled fonts |
 | Filesystem | POSIX | FATFS / SD card |
-| Progress storage | `~/.local/state/inky/progress/` | NVS / SD card |
 | Tasks | main loop | FreeRTOS tasks |
 
-## Running the prototypes
+## Running the terminal reader prototype
 
-Both prototypes share the same core engine under `shared/` and use the same progress store (`~/.local/state/inky/progress/`).
-
-Place EPUBs in the project `Books/` folder, or pass a path on the command line.
-
-### Terminal reader
+The terminal reader opens an EPUB and lets you navigate chapters with the keyboard. It is the first step toward the paginated SDL2 reader.
 
 ```bash
 cd pc/terminal_reader
@@ -81,87 +85,28 @@ Controls:
 
 | Key | Action |
 |---|---|
-| `↑` / `↓` (arrows) | Select a book in the library |
-| `Enter` | Open the selected book or `[Kavita]` catalog entry |
-| `c` | Context menu for a downloaded Kavita book (sync / delete) |
-| `←` / `→` (arrows) | Previous / next catalog page (in Kavita lists) |
-| `←` (left arrow) | Previous page (while reading) |
-| `→` (right arrow) | Next page (while reading) |
-| `q` | Close the book and return to the library; press again to quit |
+| `←` (left arrow) | Previous page |
+| `→` (right arrow) | Next page |
+| `q` | Quit |
 
-### SDL reader
+At chapter boundaries, the left/right arrows continue into the previous or next chapter. The reader starts at the first entry of the book's spine.
 
-Simulates the 960×540 LilyGo T5 4.7" S3 e-paper display. Uses a monospace font so the cell-based layout engine matches the rendered text.
+## Flashing the ESP32 firmware
 
 ```bash
-cd pc/sdl_reader
-make
-./inky_sdl /path/to/book.epub
+cd esp/inky
+source ~/Code/esp-idf/export.sh
+sudo -E env "PATH=$PATH" idf.py -p /dev/ttyACM0 flash
 ```
 
-Controls:
-
-| Key | Action |
-|---|---|
-| `↑` / `↓` (arrows) | Select a book in the library |
-| `Enter` | Open the selected book or `[Kavita]` catalog entry |
-| `c` | Context menu for a downloaded Kavita book (sync / delete) |
-| `←` / `→` or `Page Up` / `Page Down` | Previous / next catalog page (in Kavita lists) |
-| `←` (left arrow) / `Page Up` | Previous page (while reading) |
-| `→` (right arrow) / `Page Down` / `Space` | Next page (while reading) |
-| `q` / `Esc` | Close the book and return to the library; press again to quit |
-
-At chapter boundaries, the navigation keys continue into the previous or next chapter. The reader starts at the first entry of the book's spine, then resumes from the last saved position if one exists.
-
-A status bar at the bottom of the screen shows the current chapter's page percentage and the overall book percentage.
-
-## Kavita integration
-
-Create `~/.config/inky/kavita.toml`:
-
-```toml
-[kavita]
-url = "http://kavita.home.lan:5000"
-api_key = "..."
-```
-
-Launch the reader without arguments, select `[Kavita]` at the bottom of the book list, and browse:
-
-1. Series list — paginated if the library is large.
-2. Volumes for the selected series.
-3. Downloaded EPUBs are saved to `Books/` with a `.meta.json` sidecar containing `kavita_volume_id`, `kavita_series_id`, `kavita_library_id`, and a spine-to-chapter ID map.
-
-Progress is synced with Kavita automatically:
-
-- On **open**: local progress is merged with the remote progress; whichever has the newer `updated_at` timestamp wins.
-- On **close**: local progress is pushed to Kavita immediately on PC.
-- On **device**: Wi-Fi is connected on demand, progress is pushed, then disconnected; failed pushes are queued for the next session.
-- Context menu (`c` on a downloaded book): manually sync progress or delete the book and its sidecar.
-- After a Kavita download, choosing **q** at the "open it?" prompt returns to a refreshed book list.
-
-## Module layout
-
-| Module | Files | Responsibility |
-|---|---|---|
-| `books_dir` | `books_dir/books_dir.h`, `books_dir/books_dir.c` | Locate the `Books/` folder relative to the current working directory |
-| `archive` | `archive/archive.h`, `archive/archive.c` | Opaque ZIP archive abstraction: libzip on PC, miniz (or similar) on ESP32 |
-| `book_list` | `book_list/book_list.h`, `book_list/book_list.c` | Scan `Books/` for `.epub` files and load their saved progress |
-| `epub` | `epub/epub.h`, `epub/epub.c` | Open EPUB ZIP, read `container.xml` / `.opf`, build chapter list from spine |
-| `html` | `html/html.h`, `html/html.c` | Strip HTML tags and collapse whitespace into plain text |
-| `kavita` | `kavita/kavita.h`, `kavita/kavita.c` | OPDS config, catalog browsing, streaming download, metadata sidecar |
-| `layout` | `layout/layout.h`, `layout/layout.c` | Cell-based word-wrap and pagination (`rows × cols`) |
-| `progress` | `progress/progress.h`, `progress/progress.c` | Save/load reading position to XDG state directory |
-| `reader` | `reader/reader.h`, `reader/reader.c` | Platform-independent reading session: open, close, navigate, relayout |
-| `terminal` | `terminal/terminal.h`, `terminal/terminal.c` | Terminal size, raw input, and keyboard input abstraction |
+If the board is in deep sleep and `/dev/ttyACM0` is missing, use `esp/inky/flash_when_awake.sh`, which waits for the serial port to enumerate and flashes immediately.
 
 ## Development notes
 
 - The PC prototype lets us iterate on parsing, layout, and the UI without flashing hardware.
 - Platform-specific code lives behind clean interfaces so the same core can run on Linux and ESP32.
-- The `archive` module hides the underlying ZIP library. On PC it wraps `libzip`; on ESP32 it will be re-implemented with a smaller library such as `miniz` so the EPUB parser does not depend on a heavy dependency.
 - Keep EPUBs text-only for the first iterations; image support may come later.
-- Progress files are stored in `$XDG_STATE_HOME/inky/progress/` (usually `~/.local/state/inky/progress/`) rather than as sidecars next to EPUBs, so book directories stay clean.
-- Makefiles use `-MMD` so editing a header rebuilds the affected files without `make clean`.
+- The board goes into deep sleep between refreshes to maximize battery life.
 
 ## Useful resources
 
@@ -170,15 +115,3 @@ Progress is synced with Kavita automatically:
 - [cJSON](https://github.com/DaveGamble/cJSON)
 - [SDL2](https://www.libsdl.org/)
 - [Kavita API docs](https://www.kavitareader.com/)
-
-## Detailed next steps
-
-These items are not yet covered by the high-level milestones above:
-
-- [ ] Queue progress updates when offline; drain queue on next successful Kavita connection.
-- [ ] On device: Wi-Fi connects on demand for Kavita operations; disconnect when done.
-- [ ] Per-network VPN flag in `network.toml` so home LAN connects directly while remote networks use OpenVPN.
-
-## Outstanding technical debt
-
-- None currently.
